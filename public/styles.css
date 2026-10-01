@@ -33,6 +33,26 @@ body {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
 }
 
+#tool-mode {
+  display: flex;
+  gap: 4px;
+}
+
+.tool-button {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 999px;
+  background: #eee;
+  color: #1d1d1d;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.tool-button.selected {
+  background: #1d1d1d;
+  color: #fff;
+}
+
 #palette {
   display: flex;
   gap: 8px;
@@ -86,7 +106,20 @@ body {
   opacity: 0;
 }
 
-#brush-size {
+#tool-cursor {
+  position: fixed;
+  z-index: 20;
+  display: none;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.7);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+#brush-size,
+#eraser-size {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -94,6 +127,7 @@ body {
   color: #1d1d1d;
 }
 
-#brush-size-value {
+#brush-size-value,
+#eraser-size-value {
   min-width: 2.5em;
 }

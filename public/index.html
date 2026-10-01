@@ -8,6 +8,10 @@
   </head>
   <body>
     <div id="toolbar">
+      <div id="tool-mode">
+        <button id="tool-brush" class="tool-button selected" aria-pressed="true">Brush</button>
+        <button id="tool-eraser" class="tool-button" aria-pressed="false">Eraser</button>
+      </div>
       <div id="palette">
         <button class="swatch selected" data-color="#1d1d1d" style="background:#1d1d1d" aria-label="black"></button>
         <button class="swatch" data-color="#e53935" style="background:#e53935" aria-label="red"></button>
@@ -23,8 +27,14 @@
         <input type="range" id="brush-size-slider" min="1" max="40" value="6" step="1" />
         <output id="brush-size-value" for="brush-size-slider">6px</output>
       </div>
+      <div id="eraser-size">
+        <label for="eraser-size-slider">Eraser size</label>
+        <input type="range" id="eraser-size-slider" min="10" max="100" value="30" step="1" />
+        <output id="eraser-size-value" for="eraser-size-slider">30px</output>
+      </div>
     </div>
     <canvas id="canvas"></canvas>
+    <div id="tool-cursor" aria-hidden="true"></div>
     <script src="/app.js" type="module"></script>
   </body>
 </html>
