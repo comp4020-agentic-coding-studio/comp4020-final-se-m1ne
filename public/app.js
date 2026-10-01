@@ -1,11 +1,3 @@
-import {
-  boundingBoxesIntersectWithMargin,
-  effectiveRadius,
-  eraseFromPolyline,
-  segmentBoundingBox,
-  strokeBoundingBox,
-} from "./geometry.js";
-
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const toolCursor = document.getElementById("tool-cursor");
@@ -17,28 +9,51 @@ const eraserSizeValue = document.getElementById("eraser-size-value");
 const toolBrushButton = document.getElementById("tool-brush");
 const toolEraserButton = document.getElementById("tool-eraser");
 
-// Strokes are split by ownership so the eraser preview can affect only this
-// participant's own content: otherStrokes is never touched by localErase,
-// so another participant's drawing can never flicker/pop under this client's
-// eraser cursor. ownedStrokes is this client's own authoritative, locally
-// up-to-date model, kept in sync with the server's identical geometry.
-let otherStrokes = [];
-let ownedStrokes = [];
+// Each owner gets its own off-screen raster layer: a private <canvas> that
+// only that owner's ops are ever replayed onto. Draw ops paint with
+// source-over; erase ops paint with destination-out -- the browser's own
+// true alpha-clearing composite mode, applied only to this layer. Because an
+// owner's erase op is never even given the chance to touch any other
+// owner's layer canvas, cross-owner erasure isn't filtered out after the
+// fact -- there's no code path through which it could happen at all.
+//
+// The shared visible canvas is NOT a fixed per-owner stack (that would pin
+// an owner's z-position to their first-ever op, so a later redraw could
+// never appear above another owner's intervening draw -- the opposite of
+// "later draws go on top"). Instead repaintVisibleCanvas replays the single
+// server-seq-ordered op list directly: for each draw op it paints just that
+// op's own stroke onto a reusable scratch canvas, clips it (destination-in)
+// against the issuing owner's own current layer, then source-over's the
+// clipped result onto the shared canvas. Erase ops never touch the shared
+// canvas at all -- their only effect is already baked into the owner's own
+// layer, which is exactly what later same-owner draws get clipped against --
+// so destination-out is never applied to the shared canvas and one owner's
+// erase can never remove another owner's pixels.
+let layers = new Map(); // ownerId -> { canvas, ctx }, each owner's own current-state mask
+let scratch = null; // { canvas, ctx }, reused per draw-op during a repaint
+let allOps = []; // op[], the full history in server seq order -- the only thing that controls stacking order
+let opsByOwner = new Map(); // ownerId -> op[] in seq order, used only to rebuild each owner's own layer
+
 let myOwnerId = null;
 let color = "#1d1d1d";
 let brushSizePx = Number(sizeSlider.value);
 let eraserSizePx = Number(eraserSizeSlider.value);
-let current = null; // { color, width, points: [{x, y}] }, width normalized like points are
 let mode = "brush"; // "brush" | "eraser"
-let erasing = false; // whether an eraser drag is currently in progress
-let pendingPath = []; // normalized points accumulated since the last rAF flush, for the drag in progress
-let eraseFrameHandle = null; // requestAnimationFrame handle for the next scheduled flush, or null
-let pendingErases = []; // in-flight persistence requests for the erase drag in progress
+
+// The gesture currently being dragged (from pointerdown to pointerup/cancel),
+// painted onto the local owner's own layer as points stream in -- see
+// renderCurrentDelta. Not yet persisted until the gesture ends.
+let current = null; // { kind: "draw" | "erase", color: string | null, size: number (normalized), points: [{x, y}] }
+let currentLastRenderedIndex = 0;
+let frameHandle = null; // requestAnimationFrame handle for the next scheduled render, or null
 
 function resizeCanvas() {
   canvas.width = canvas.clientWidth;
   canvas.height = canvas.clientHeight;
-  redraw();
+  // Resizing a canvas clears its bitmap (browser behaviour, not a choice
+  // made here), including every per-owner layer -- so a resize must replay
+  // each owner's full op history from scratch at the new pixel size.
+  rebuildAllLayers();
 }
 
 // Points are stored normalized to the canvas's own width/height at draw
@@ -56,35 +71,164 @@ function toPixels(point) {
   return { x: point.x * canvas.width, y: point.y * canvas.height };
 }
 
-function drawStroke(stroke) {
-  if (stroke.points.length === 0) return;
-
-  ctx.strokeStyle = stroke.color;
-  ctx.lineWidth = stroke.width * canvas.width;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-
-  const pixels = stroke.points.map(toPixels);
-  ctx.beginPath();
-  ctx.moveTo(pixels[0].x, pixels[0].y);
-  for (const point of pixels.slice(1)) ctx.lineTo(point.x, point.y);
-  if (pixels.length === 1) ctx.lineTo(pixels[0].x, pixels[0].y); // a tap: draw a dot
-  ctx.stroke();
+function ensureLayer(ownerId) {
+  let layer = layers.get(ownerId);
+  if (!layer) {
+    const layerCanvas = document.createElement("canvas");
+    layerCanvas.width = canvas.width;
+    layerCanvas.height = canvas.height;
+    layer = { canvas: layerCanvas, ctx: layerCanvas.getContext("2d") };
+    layers.set(ownerId, layer);
+  }
+  return layer;
 }
 
-function redraw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (const stroke of otherStrokes) drawStroke(stroke);
-  for (const stroke of ownedStrokes) drawStroke(stroke);
-  if (current) drawStroke(current);
+function ensureScratch() {
+  if (!scratch || scratch.canvas.width !== canvas.width || scratch.canvas.height !== canvas.height) {
+    const scratchCanvas = document.createElement("canvas");
+    scratchCanvas.width = canvas.width;
+    scratchCanvas.height = canvas.height;
+    scratch = { canvas: scratchCanvas, ctx: scratchCanvas.getContext("2d") };
+  }
+  return scratch;
 }
 
-async function loadStrokes() {
-  const res = await fetch("/api/strokes");
-  const all = await res.json();
-  otherStrokes = all.filter((s) => s.ownerId !== myOwnerId);
-  ownedStrokes = all.filter((s) => s.ownerId === myOwnerId);
-  redraw();
+// Strokes a raw polyline -- no smoothing -- onto one owner's layer. A draw
+// op uses source-over with its own color; an erase op uses destination-out,
+// which only consumes the alpha/coverage of the path just stroked and
+// ignores color entirely, so "#000" below is an arbitrary opaque choice.
+// Shared by full replay (every historical op) and the live in-progress
+// gesture (just its newest delta), so there is exactly one rendering code
+// path for both draw and erase, in every situation.
+function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points) {
+  if (points.length === 0) return;
+  const pixels = points.map(toPixels);
+
+  layerCtx.save();
+  layerCtx.globalCompositeOperation = kind === "erase" ? "destination-out" : "source-over";
+  layerCtx.strokeStyle = kind === "erase" ? "#000" : color;
+  layerCtx.lineWidth = sizeNormalized * canvas.width;
+  layerCtx.lineCap = "round";
+  layerCtx.lineJoin = "round";
+
+  layerCtx.beginPath();
+  layerCtx.moveTo(pixels[0].x, pixels[0].y);
+  if (pixels.length === 1) {
+    // A tap: a zero-length path with a round cap renders as a filled circle.
+    layerCtx.lineTo(pixels[0].x, pixels[0].y);
+  } else {
+    for (let i = 1; i < pixels.length; i++) layerCtx.lineTo(pixels[i].x, pixels[i].y);
+  }
+  layerCtx.stroke();
+  layerCtx.restore();
+}
+
+function rebuildLayerFromOps(ownerId) {
+  const layer = ensureLayer(ownerId);
+  layer.canvas.width = canvas.width;
+  layer.canvas.height = canvas.height;
+  const ops = opsByOwner.get(ownerId) ?? [];
+  for (const op of ops) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points);
+}
+
+function rebuildAllLayers() {
+  for (const ownerId of opsByOwner.keys()) rebuildLayerFromOps(ownerId);
+  if (current && myOwnerId !== null) {
+    const layer = ensureLayer(myOwnerId);
+    renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, current.points);
+    currentLastRenderedIndex = current.points.length - 1;
+  }
+  repaintVisibleCanvas();
+}
+
+// A draw op's own bounding box, in normalized [0,1] units padded by half its
+// stroke width -- cached on the op object itself the first time it's needed.
+// Normalized (not pixel) units survive a resize untouched, since the points
+// that produced them don't change; only the pixel conversion below depends
+// on the current canvas size.
+function opNormalizedBounds(op) {
+  if (!op._normBounds) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of op.points) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const pad = op.size / 2;
+    op._normBounds = { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+  }
+  return op._normBounds;
+}
+
+function opPixelBounds(op) {
+  const b = opNormalizedBounds(op);
+  return {
+    x: b.minX * canvas.width,
+    y: b.minY * canvas.height,
+    width: (b.maxX - b.minX) * canvas.width,
+    height: (b.maxY - b.minY) * canvas.height,
+  };
+}
+
+function rectsIntersect(a, b) {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+// Full rebuild of the shared visible canvas from scratch, in global seq
+// order -- see the module-level comment for why this (not a fixed per-owner
+// stack) is what makes later draws win regardless of whose layer they're on.
+//
+// `region` (pixel-space {x, y, width, height}) restricts every clearRect and
+// drawImage call below to that sub-rectangle instead of the whole canvas,
+// and skips any draw op whose own bounding box can't overlap it. This is
+// exactly the same per-op scratch+clip+composite math as the unrestricted
+// call -- nothing is approximated -- it just leaves untouched (and therefore
+// correctly unchanged) every pixel outside the region. That's what makes it
+// safe to call every animation frame during a live erase: an erase can only
+// ever shrink the erasing owner's own layer, so the only pixels whose
+// composited result could possibly change this frame are the ones under the
+// eraser's current stroke delta, which is exactly what the caller passes in.
+function repaintVisibleCanvas(region) {
+  const rx = region ? Math.max(0, Math.floor(region.x)) : 0;
+  const ry = region ? Math.max(0, Math.floor(region.y)) : 0;
+  const rw = region ? Math.min(canvas.width - rx, Math.ceil(region.x + region.width) - rx) : canvas.width;
+  const rh = region ? Math.min(canvas.height - ry, Math.ceil(region.y + region.height) - ry) : canvas.height;
+  if (rw <= 0 || rh <= 0) return;
+
+  ctx.clearRect(rx, ry, rw, rh);
+  const { canvas: scratchCanvas, ctx: scratchCtx } = ensureScratch();
+  const clipRect = region ? { x: rx, y: ry, width: rw, height: rh } : null;
+  for (const op of allOps) {
+    if (op.kind !== "draw") continue; // an erase op's only effect is already baked into its owner's layer, below
+    if (clipRect && !rectsIntersect(opPixelBounds(op), clipRect)) continue; // this op can't paint inside the dirty region at all
+    const ownerLayer = layers.get(op.ownerId);
+    if (!ownerLayer) continue;
+    scratchCtx.clearRect(rx, ry, rw, rh);
+    renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points);
+    scratchCtx.globalCompositeOperation = "destination-in";
+    scratchCtx.drawImage(ownerLayer.canvas, rx, ry, rw, rh, rx, ry, rw, rh);
+    scratchCtx.globalCompositeOperation = "source-over";
+    ctx.drawImage(scratchCanvas, rx, ry, rw, rh, rx, ry, rw, rh);
+  }
+  if (current && current.kind === "draw" && myOwnerId !== null) {
+    // The in-progress gesture is always the newest content in existence, so
+    // it's always safe to paint it directly and unclipped on top of
+    // everything just replayed above.
+    renderPathOnLayer(ctx, "draw", current.color, current.size, current.points);
+  }
+}
+
+async function loadOps() {
+  const res = await fetch("/api/ops");
+  allOps = await res.json(); // already server-seq-ordered; this exact array (not owner grouping) drives stacking order
+  opsByOwner = new Map();
+  layers = new Map();
+  for (const op of allOps) {
+    if (!opsByOwner.has(op.ownerId)) opsByOwner.set(op.ownerId, []);
+    opsByOwner.get(op.ownerId).push(op);
+  }
+  rebuildAllLayers();
 }
 
 async function loadMe() {
@@ -92,199 +236,174 @@ async function loadMe() {
   ({ ownerId: myOwnerId } = await res.json());
 }
 
-async function saveStroke(stroke) {
-  const res = await fetch("/api/strokes", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ color: stroke.color, width: stroke.width, points: stroke.points }),
-  });
-  Object.assign(stroke, await res.json()); // picks up id, ownerId, createdAt from the server
-}
-
 function pointerPos(event) {
   return toNormalized(event.clientX, event.clientY);
 }
 
-function eraserRadiusNormalized() {
-  return eraserSizePx / 2 / canvas.width;
-}
-
-// Applies the exact swept-capsule geometry for every consecutive pair in
-// `path` (not just its endpoints), sequentially chaining through whatever
-// fragments an earlier pair in the same path already produced -- so no
-// movement between frames is ever dropped. Only ever touches ownedStrokes
-// (this client's own, matched by ownerId learned once from /api/me): this is
-// purely a rendering decision, not an authorization one -- the server
-// re-derives ownership from the cookie and enforces it independently of
-// anything the client does here. otherStrokes is never read or written here,
-// so another participant's strokes can never flicker under this preview.
-// A bounding-box prefilter skips the expensive exact test for strokes whose
-// (cached) bounding box can't possibly intersect a segment's swept region --
-// a scalability guard only; it can never change which strokes are affected.
-function localErase(path, radius) {
-  if (myOwnerId === null) return;
-  let working = ownedStrokes;
-  let changed = false;
-
-  for (let i = 0; i < path.length - 1; i++) {
-    const from = path[i];
-    const to = path[i + 1];
-    const segmentBox = segmentBoundingBox(from, to);
-    const next = [];
-
-    for (const stroke of working) {
-      const radiusForStroke = effectiveRadius(radius, stroke.width);
-      const strokeBox = (stroke._bbox ??= strokeBoundingBox(stroke.points));
-      if (!boundingBoxesIntersectWithMargin(strokeBox, segmentBox, radiusForStroke)) {
-        next.push(stroke);
-        continue;
-      }
-
-      const result = eraseFromPolyline(stroke.points, from, to, radiusForStroke);
-      if (!result.changed) {
-        next.push(stroke);
-        continue;
-      }
-      changed = true;
-      for (const points of result.fragments) {
-        next.push({
-          id: crypto.randomUUID(), // a throwaway local id; replaced wholesale once loadStrokes() resyncs
-          ownerId: stroke.ownerId,
-          color: stroke.color,
-          width: stroke.width,
-          points,
-          createdAt: stroke.createdAt,
-        });
-      }
-    }
-    working = next;
-  }
-
-  if (changed) {
-    ownedStrokes = working;
-    redraw();
-  }
-}
-
-// Fire-and-forget: persistence never gates the next visible frame. The
-// server computes and stores the authoritative result independently (scoped
-// to the caller's own strokes, chaining through the same path exactly like
-// localErase does); its response isn't applied back onto ownedStrokes here;
-// see finishErasing for why that's safe.
-function sendErase(path, radius) {
-  return fetch("/api/erase", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, radius }),
-  }).catch(() => {});
-}
-
-// Pulls every point the browser actually sampled since the last event
+// Every point the browser actually sampled since the last event
 // (getCoalescedEvents), not just the one coalesced event the browser chose to
 // dispatch -- so a fast drag's true path is captured even when pointer
 // polling outpaces frame rate. Falls back to the event itself wherever
-// coalesced events aren't available, or report none.
-function accumulatePointerPath(event) {
+// coalesced events aren't available, or report none. Kept from the earlier
+// vector-fragment implementation: denser sampling is just as necessary for
+// faithful raster replay (a fast sweep must erase continuously, not in
+// gaps) as it was for exact capsule geometry, so this one piece survives the
+// migration unchanged.
+function coalescedPositions(event) {
   const coalesced = typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [];
   const samples = coalesced.length > 0 ? coalesced : [event];
-  for (const sample of samples) pendingPath.push(pointerPos(sample));
+  return samples.map(pointerPos);
 }
 
-function queueEraseFrame() {
-  if (eraseFrameHandle === null) {
-    eraseFrameHandle = requestAnimationFrame(flushErase);
+function queueFrame() {
+  if (frameHandle === null) {
+    frameHandle = requestAnimationFrame(() => {
+      frameHandle = null;
+      renderCurrentDelta();
+    });
   }
 }
 
-// Runs the exact geometry (and its batched persistence) at most once per
-// rendered frame, regardless of how many raw pointer samples arrived since
-// the last one -- this is what keeps the authoritative update cheap and
-// bounded while still landing inside the same frame as the cursor move that
-// triggered it, since a frame's pointer events are dispatched before that
-// frame's requestAnimationFrame callbacks run.
-function flushErase() {
-  eraseFrameHandle = null;
-  if (pendingPath.length < 2) return;
-  const radius = eraserRadiusNormalized();
-  const path = pendingPath;
-  pendingPath = [path[path.length - 1]]; // carry the endpoint forward as the next frame's anchor
-  localErase(path, radius);
-  pendingErases.push(sendErase(path, radius));
+function cancelFrame() {
+  if (frameHandle !== null) {
+    cancelAnimationFrame(frameHandle);
+    frameHandle = null;
+  }
 }
 
-// Used at pointerup/pointercancel: flushes synchronously rather than waiting
-// for the next animation frame, since the gesture is ending now and there
-// won't be one.
-function flushEraseNow() {
-  if (eraseFrameHandle !== null) {
-    cancelAnimationFrame(eraseFrameHandle);
-    eraseFrameHandle = null;
+// Paints only the portion of the in-progress gesture accumulated since the
+// last render -- not the whole path again -- directly onto the local
+// owner's own layer, then recomposites. This is what makes drawing and
+// erasing visible immediately, every frame, without waiting on the network:
+// the pixels are already final by the time persistGesture's request even
+// goes out, so there is nothing left to reconcile when it comes back.
+function renderCurrentDelta() {
+  if (!current || myOwnerId === null) return;
+  const layer = ensureLayer(myOwnerId);
+  const delta = current.points.slice(currentLastRenderedIndex);
+  renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, delta);
+  currentLastRenderedIndex = current.points.length - 1;
+  if (current.kind === "draw") {
+    // Newest content is always safe to paint directly on top, unclipped --
+    // nothing drawn after it yet, by anyone, could have occluded it.
+    renderPathOnLayer(ctx, "draw", current.color, current.size, delta);
+  } else {
+    // An in-progress erase can retroactively shrink any of this owner's
+    // already-composited draws, anywhere in the global stacking order --
+    // not expressible as a direct paint, so repaint instead. But only the
+    // pixels this frame's delta actually touches can have changed (erasing
+    // only shrinks alpha, it never reveals anything outside the stroke), so
+    // restrict the repaint to that region instead of the whole canvas --
+    // see repaintVisibleCanvas's own comment for why that's still exact.
+    repaintVisibleCanvas(deltaRegionPixels(delta, current.size));
   }
-  flushErase();
-  pendingPath = [];
+}
+
+// The pixel-space rectangle a stroke delta could possibly have painted into:
+// its own bounding box, padded by half the stroke width plus a couple of
+// pixels for antialiased edges.
+function deltaRegionPixels(points, sizeNormalized) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const padPx = (sizeNormalized * canvas.width) / 2 + 2;
+  const x0 = minX * canvas.width - padPx;
+  const y0 = minY * canvas.height - padPx;
+  const x1 = maxX * canvas.width + padPx;
+  const y1 = maxY * canvas.height + padPx;
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+function beginGesture(kind, point) {
+  if (myOwnerId === null) return;
+  current = {
+    kind,
+    color: kind === "erase" ? null : color,
+    size: (kind === "erase" ? eraserSizePx : brushSizePx) / canvas.width,
+    points: [point],
+  };
+  currentLastRenderedIndex = 0;
+  renderCurrentDelta();
+}
+
+function appendToGesture(points) {
+  if (!current) return;
+  current.points.push(...points);
+  queueFrame();
+}
+
+async function persistGesture(finished) {
+  const endpoint = finished.kind === "erase" ? "/api/ops/erase" : "/api/ops/draw";
+  const body =
+    finished.kind === "erase"
+      ? { radius: finished.size / 2, points: finished.points }
+      : { color: finished.color, width: finished.size, points: finished.points };
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`${endpoint} responded ${res.status}`);
+    const saved = await res.json();
+    const op = {
+      seq: saved.seq,
+      id: saved.id,
+      ownerId: saved.ownerId,
+      kind: finished.kind,
+      color: finished.color,
+      size: finished.size,
+      points: finished.points,
+      createdAt: saved.createdAt,
+    };
+    // Appended at the end: with no live multi-user sync yet, nothing else
+    // locally inserts an op into allOps mid-session, so this is always the
+    // new highest-seq entry for this client's own view.
+    allOps.push(op);
+    if (!opsByOwner.has(myOwnerId)) opsByOwner.set(myOwnerId, []);
+    opsByOwner.get(myOwnerId).push(op);
+    // Already painted onto my own layer live, point by point, as the
+    // gesture happened -- this only keeps the replay history in sync for a
+    // future resize/reload. No re-render here: the server never recomputes
+    // or transforms this op's geometry, so there is nothing that could
+    // disagree with what's already on screen, and so nothing to pop.
+  } catch {
+    // Best-effort; the gesture is already visible locally even if this
+    // particular persistence call failed.
+  }
+}
+
+function endGesture() {
+  if (!current) return;
+  cancelFrame();
+  renderCurrentDelta(); // flush any points accumulated since the last rendered frame
+  // The per-frame erase preview only ever repaints the delta's own region
+  // (see renderCurrentDelta); reconcile with one full, authoritative repaint
+  // at gesture end so nothing has drifted. This runs once per gesture, not
+  // once per frame, so it doesn't reintroduce the per-frame cost just fixed.
+  if (current.kind === "erase") repaintVisibleCanvas();
+  const finished = current;
+  current = null;
+  persistGesture(finished);
 }
 
 canvas.addEventListener("pointerdown", (event) => {
   canvas.setPointerCapture(event.pointerId);
-  if (mode === "eraser") {
-    const point = pointerPos(event);
-    erasing = true;
-    pendingErases = [];
-    pendingPath = [point, point]; // a tap: a degenerate zero-length segment, same as a plain click today
-    queueEraseFrame();
-    return;
-  }
-  current = { color, width: brushSizePx / canvas.width, points: [pointerPos(event)] };
-  redraw();
+  beginGesture(mode === "eraser" ? "erase" : "draw", pointerPos(event));
 });
 
 canvas.addEventListener("pointermove", (event) => {
-  if (mode === "eraser") {
-    if (event.buttons !== 0 && erasing) {
-      accumulatePointerPath(event);
-      queueEraseFrame();
-    }
-    return;
-  }
   if (!current) return;
-  current.points.push(pointerPos(event));
-  redraw();
+  appendToGesture(coalescedPositions(event));
 });
 
-function endStroke() {
-  if (!current) return;
-  const finished = current;
-  current = null;
-  ownedStrokes.push(finished);
-  redraw();
-  saveStroke(finished);
-}
-
-// Once persistence for every batched request in this drag has actually
-// landed, pull the confirmed server state in one shot. Local and server
-// state should already agree (same geometry, same algorithm), so this is
-// normally invisible -- it's a correctness backstop, not how erasing is
-// meant to look.
-async function finishErasing() {
-  if (pendingErases.length === 0) return;
-  const settled = pendingErases;
-  pendingErases = [];
-  await Promise.all(settled);
-  await loadStrokes();
-}
-
-canvas.addEventListener("pointerup", () => {
-  flushEraseNow();
-  erasing = false;
-  endStroke();
-  finishErasing();
-});
-canvas.addEventListener("pointercancel", () => {
-  flushEraseNow();
-  erasing = false;
-  endStroke();
-  finishErasing();
-});
+canvas.addEventListener("pointerup", endGesture);
+canvas.addEventListener("pointercancel", endGesture);
 
 function selectSwatch(swatch) {
   document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("selected"));
@@ -337,9 +456,12 @@ toolEraserButton.addEventListener("click", () => setMode("eraser"));
 // canvas's own 2D context, so it can never end up in persisted artwork.
 // brushSizePx/eraserSizePx are already defined in canvas CSS-pixel terms
 // (that's the slider's native unit; normalization only happens when a
-// stroke's width is stored), and the canvas's backing-store size tracks its
+// gesture's size is stored), and the canvas's backing-store size tracks its
 // CSS size 1:1 (resizeCanvas sets canvas.width = canvas.clientWidth), so no
-// conversion is needed and a resize can't desync the two.
+// conversion is needed and a resize can't desync the two. Both tools now
+// stroke with lineWidth = size * canvas.width, so this on-screen circle is
+// exactly the footprint that will actually be painted -- not an
+// approximation of it.
 function currentToolDiameterPx() {
   return mode === "eraser" ? eraserSizePx : brushSizePx;
 }
@@ -372,4 +494,4 @@ window.addEventListener("resize", () => {
 });
 resizeCanvas();
 setMode(mode);
-loadMe().then(loadStrokes); // ownership must be known before loadStrokes can split by it
+loadMe().then(loadOps); // ownership must be known before a layer can be attributed to "my own"
