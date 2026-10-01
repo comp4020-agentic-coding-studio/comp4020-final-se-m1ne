@@ -1,0 +1,99 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: system-ui, sans-serif;
+  background: #fafafa;
+}
+
+#canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  background: #ffffff;
+}
+
+#toolbar {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+#palette {
+  display: flex;
+  gap: 8px;
+}
+
+.swatch {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.swatch.selected {
+  border-color: #1d1d1d;
+}
+
+.custom-swatch {
+  display: block;
+  position: relative;
+  /* updated to the picker's current value via JS, so this circle always
+     shows the selected custom colour rather than a fixed icon */
+  background: #1d1d1d;
+}
+
+/* small "+" in the corner is the only hint that this swatch opens a picker,
+   rather than selecting a fixed colour like the presets beside it */
+.custom-swatch::after {
+  content: "+";
+  position: absolute;
+  right: -1px;
+  bottom: -4px;
+  font-size: 13px;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+
+.custom-swatch input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  cursor: pointer;
+  background: none;
+  opacity: 0;
+}
+
+#brush-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #1d1d1d;
+}
+
+#brush-size-value {
+  min-width: 2.5em;
+}

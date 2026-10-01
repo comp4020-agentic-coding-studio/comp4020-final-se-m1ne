@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Shared canvas</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="toolbar">
+      <div id="palette">
+        <button class="swatch selected" data-color="#1d1d1d" style="background:#1d1d1d" aria-label="black"></button>
+        <button class="swatch" data-color="#e53935" style="background:#e53935" aria-label="red"></button>
+        <button class="swatch" data-color="#1e88e5" style="background:#1e88e5" aria-label="blue"></button>
+        <button class="swatch" data-color="#43a047" style="background:#43a047" aria-label="green"></button>
+        <button class="swatch" data-color="#fdd835" style="background:#fdd835" aria-label="yellow"></button>
+        <label class="swatch custom-swatch" aria-label="custom colour">
+          <input type="color" id="custom-color" value="#1d1d1d" />
+        </label>
+      </div>
+      <div id="brush-size">
+        <label for="brush-size-slider">Brush size</label>
+        <input type="range" id="brush-size-slider" min="1" max="40" value="6" step="1" />
+        <output id="brush-size-value" for="brush-size-slider">6px</output>
+      </div>
+    </div>
+    <canvas id="canvas"></canvas>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

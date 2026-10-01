@@ -2,6 +2,10 @@ node_modules/
 dist/
 *.log
 
+# local override for DB_PATH when running the server outside Docker —
+# in the container/on Fly this is the /data volume instead
+/data/
+
 # editor and OS junk
 .DS_Store
 ._*
