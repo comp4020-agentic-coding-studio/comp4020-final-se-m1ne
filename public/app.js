@@ -4,10 +4,8 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const toolCursor = document.getElementById("tool-cursor");
 const customColorInput = document.getElementById("custom-color");
-const sizeSlider = document.getElementById("brush-size-slider");
-const sizeValue = document.getElementById("brush-size-value");
-const eraserSizeSlider = document.getElementById("eraser-size-slider");
-const eraserSizeValue = document.getElementById("eraser-size-value");
+const toolSizeSlider = document.getElementById("tool-size-slider");
+const toolSizeValue = document.getElementById("tool-size-value");
 const toolBrushButton = document.getElementById("tool-brush");
 const toolEraserButton = document.getElementById("tool-eraser");
 const createRoomButton = document.getElementById("create-room-button");
@@ -56,9 +54,44 @@ let opsByOwner = new Map(); // ownerId -> op[] in seq order, used only to rebuil
 
 let myOwnerId = null;
 let color = "#1d1d1d";
-let brushSizePx = Number(sizeSlider.value);
-let eraserSizePx = Number(eraserSizeSlider.value);
+let brushSizePx = 6;
+let eraserSizePx = 30;
 let mode = "brush"; // "brush" | "eraser"
+
+// One shared slider's meaning depends on which tool is active: each entry
+// owns its own range (matching the two permanent sliders' old min/max/step
+// exactly) plus a get/set pair onto that tool's own independent size
+// variable, so the control is shared while brushSizePx/eraserSizePx stay
+// exactly as independent as they were before. A future tool plugs in by
+// adding one more entry here, not one more permanent slider in the markup.
+const toolSizes = {
+  brush: {
+    min: 1,
+    max: 40,
+    step: 1,
+    get: () => brushSizePx,
+    set: (px) => { brushSizePx = px; },
+  },
+  eraser: {
+    min: 10,
+    max: 100,
+    step: 1,
+    get: () => eraserSizePx,
+    set: (px) => { eraserSizePx = px; },
+  },
+};
+
+// Applies the active tool's own range and current value to the one shared
+// slider -- called on every tool switch so min/max/value/display all update
+// together, never lagging behind which tool is actually selected.
+function syncSizeControlToMode() {
+  const cfg = toolSizes[mode];
+  toolSizeSlider.min = cfg.min;
+  toolSizeSlider.max = cfg.max;
+  toolSizeSlider.step = cfg.step;
+  toolSizeSlider.value = cfg.get();
+  toolSizeValue.textContent = `${cfg.get()}px`;
+}
 
 // The gesture currently being dragged (from pointerdown to pointerup/cancel),
 // painted onto the local owner's own layer as points stream in -- see
@@ -500,15 +533,10 @@ customColorInput.addEventListener("input", () => {
   selectSwatch(customSwatch);
 });
 
-sizeSlider.addEventListener("input", () => {
-  brushSizePx = Number(sizeSlider.value);
-  sizeValue.textContent = `${brushSizePx}px`;
-  updateCursorSize();
-});
-
-eraserSizeSlider.addEventListener("input", () => {
-  eraserSizePx = Number(eraserSizeSlider.value);
-  eraserSizeValue.textContent = `${eraserSizePx}px`;
+toolSizeSlider.addEventListener("input", () => {
+  const cfg = toolSizes[mode];
+  cfg.set(Number(toolSizeSlider.value));
+  toolSizeValue.textContent = `${cfg.get()}px`;
   updateCursorSize();
 });
 
@@ -519,6 +547,7 @@ function setMode(newMode) {
   toolBrushButton.setAttribute("aria-pressed", String(mode === "brush"));
   toolEraserButton.setAttribute("aria-pressed", String(mode === "eraser"));
   canvas.style.cursor = "none"; // replaced by the custom circular tool-cursor overlay
+  syncSizeControlToMode();
   updateCursorSize();
 }
 
@@ -537,7 +566,7 @@ toolEraserButton.addEventListener("click", () => setMode("eraser"));
 // exactly the footprint that will actually be painted -- not an
 // approximation of it.
 function currentToolDiameterPx() {
-  return mode === "eraser" ? eraserSizePx : brushSizePx;
+  return toolSizes[mode].get();
 }
 
 function updateCursorSize() {

@@ -179,8 +179,7 @@ body {
   pointer-events: none;
 }
 
-#brush-size,
-#eraser-size {
+#tool-size {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -188,7 +187,6 @@ body {
   color: #1d1d1d;
 }
 
-#brush-size-value,
-#eraser-size-value {
+#tool-size-value {
   min-width: 2.5em;
 }
