@@ -4,46 +4,144 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Shared canvas</title>
+    <!-- Applies the saved/preferred theme before first paint, so there is no
+         flash of the wrong theme while app.js (a module script, which runs
+         after parsing) loads. This is the only place theme is read outside
+         app.js; the toggle button's click handling, persistence, and label
+         all still live there -- this is purely a pre-paint sync read. -->
+    <script>
+      (function () {
+        var saved = localStorage.getItem("theme");
+        var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var theme = saved === "dark" || saved === "light" ? saved : prefersDark ? "dark" : "light";
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div id="room-bar">
-      <div id="public-room-controls">
-        <button id="create-room-button" type="button">Create private room</button>
-        <form id="join-room-form">
-          <input id="join-room-code" type="text" maxlength="6" placeholder="Room code" aria-label="Room code" />
-          <button type="submit">Join</button>
-        </form>
+    <div id="workspace">
+      <div id="session-bar">
+        <div id="history-controls" class="action-group">
+          <button id="undo-button" type="button" class="app-button" title="Undo (Ctrl+Z)">Undo</button>
+          <button id="redo-button" type="button" class="app-button" title="Redo (Ctrl+Y)">Redo</button>
+        </div>
+        <div id="action-row-right" class="action-group">
+          <button
+            id="theme-toggle"
+            type="button"
+            class="app-button theme-toggle"
+            aria-pressed="false"
+          ></button>
+          <div id="session-controls">
+            <div id="public-room-controls" class="session-group">
+              <button id="create-room-button" type="button" class="app-button">Create private room</button>
+              <form id="join-room-form" class="join-control">
+                <input id="join-room-code" type="text" maxlength="6" placeholder="Room code" aria-label="Room code" />
+                <button type="submit" class="app-button">Join</button>
+              </form>
+            </div>
+            <div id="private-room-controls" class="session-group" hidden>
+              <span id="room-code-label"></span>
+              <a href="/" id="back-to-public" class="app-button">Back to Public Canvas</a>
+            </div>
+          </div>
+        </div>
       </div>
-      <div id="private-room-controls" hidden>
-        <span id="room-code-label"></span>
-        <a href="/" id="back-to-public">Back to Public Canvas</a>
+
+      <div id="tool-ribbon">
+        <div class="ribbon-group" id="tool-group">
+          <span class="group-label">Tools</span>
+          <div class="group-controls">
+            <button id="tool-brush" class="tool-button selected" aria-pressed="true">Brush</button>
+            <button id="tool-eraser" class="tool-button" aria-pressed="false">Eraser</button>
+          </div>
+        </div>
+        <div class="ribbon-group" id="size-group">
+          <span class="group-label">Size</span>
+          <div class="group-controls">
+            <div class="size-control">
+              <input type="range" id="tool-size-slider" min="1" max="40" value="6" step="1" />
+              <output id="tool-size-value" for="tool-size-slider">6px</output>
+            </div>
+          </div>
+        </div>
+        <div class="ribbon-group" id="colour-group">
+          <span class="group-label">Colours</span>
+          <div class="group-controls">
+            <div id="colour-current" aria-hidden="true"></div>
+            <div id="palette">
+              <button class="swatch selected" data-color="#1d1d1d" style="background:#1d1d1d" aria-label="black"></button>
+              <button class="swatch" data-color="#e53935" style="background:#e53935" aria-label="red"></button>
+              <button class="swatch" data-color="#1e88e5" style="background:#1e88e5" aria-label="blue"></button>
+              <button class="swatch" data-color="#43a047" style="background:#43a047" aria-label="green"></button>
+              <button class="swatch" data-color="#fdd835" style="background:#fdd835" aria-label="yellow"></button>
+            </div>
+            <button
+              type="button"
+              id="edit-colour-button"
+              class="app-button"
+              aria-haspopup="dialog"
+              aria-expanded="false"
+              aria-controls="colour-popover"
+            >
+              Edit colour
+            </button>
+          </div>
+        </div>
       </div>
-      <button id="undo-button" type="button" title="Undo (Ctrl+Z)">Undo</button>
-      <button id="redo-button" type="button" title="Redo (Ctrl+Y)">Redo</button>
+
+      <canvas id="canvas"></canvas>
     </div>
-    <div id="toolbar">
-      <div id="tool-mode">
-        <button id="tool-brush" class="tool-button selected" aria-pressed="true">Brush</button>
-        <button id="tool-eraser" class="tool-button" aria-pressed="false">Eraser</button>
+
+    <div id="colour-popover" role="dialog" aria-label="Edit colour" hidden>
+      <div id="colour-popover-header">
+        <span>Edit colour</span>
+        <button type="button" id="colour-popover-close" aria-label="Close colour editor">&times;</button>
       </div>
-      <div id="palette">
-        <button class="swatch selected" data-color="#1d1d1d" style="background:#1d1d1d" aria-label="black"></button>
-        <button class="swatch" data-color="#e53935" style="background:#e53935" aria-label="red"></button>
-        <button class="swatch" data-color="#1e88e5" style="background:#1e88e5" aria-label="blue"></button>
-        <button class="swatch" data-color="#43a047" style="background:#43a047" aria-label="green"></button>
-        <button class="swatch" data-color="#fdd835" style="background:#fdd835" aria-label="yellow"></button>
-        <label class="swatch custom-swatch" aria-label="custom colour">
-          <input type="color" id="custom-color" value="#1d1d1d" />
-        </label>
-      </div>
-      <div id="tool-size">
-        <label for="tool-size-slider">Size</label>
-        <input type="range" id="tool-size-slider" min="1" max="40" value="6" step="1" />
-        <output id="tool-size-value" for="tool-size-slider">6px</output>
+      <div id="colour-popover-body">
+        <canvas id="colour-wheel" width="180" height="180" aria-label="Hue and saturation/value colour picker"></canvas>
+        <div id="colour-preview-row">
+          <span id="colour-preview-swatch" aria-hidden="true"></span>
+          <span id="colour-preview-hex"></span>
+        </div>
+        <div class="colour-fields" id="colour-rgb-fields">
+          <div class="colour-field">
+            <label for="rgb-r-slider">R</label>
+            <input type="range" id="rgb-r-slider" min="0" max="255" step="1" />
+            <input type="number" id="rgb-r-number" min="0" max="255" step="1" />
+          </div>
+          <div class="colour-field">
+            <label for="rgb-g-slider">G</label>
+            <input type="range" id="rgb-g-slider" min="0" max="255" step="1" />
+            <input type="number" id="rgb-g-number" min="0" max="255" step="1" />
+          </div>
+          <div class="colour-field">
+            <label for="rgb-b-slider">B</label>
+            <input type="range" id="rgb-b-slider" min="0" max="255" step="1" />
+            <input type="number" id="rgb-b-number" min="0" max="255" step="1" />
+          </div>
+        </div>
+        <div class="colour-fields" id="colour-hsv-fields">
+          <div class="colour-field">
+            <label for="hsv-h-slider">H</label>
+            <input type="range" id="hsv-h-slider" min="0" max="360" step="1" />
+            <input type="number" id="hsv-h-number" min="0" max="360" step="1" />
+          </div>
+          <div class="colour-field">
+            <label for="hsv-s-slider">S</label>
+            <input type="range" id="hsv-s-slider" min="0" max="100" step="1" />
+            <input type="number" id="hsv-s-number" min="0" max="100" step="1" />
+          </div>
+          <div class="colour-field">
+            <label for="hsv-v-slider">V</label>
+            <input type="range" id="hsv-v-slider" min="0" max="100" step="1" />
+            <input type="number" id="hsv-v-number" min="0" max="100" step="1" />
+          </div>
+        </div>
       </div>
     </div>
-    <canvas id="canvas"></canvas>
+
     <div id="tool-cursor" aria-hidden="true"></div>
     <script src="/app.js" type="module"></script>
   </body>

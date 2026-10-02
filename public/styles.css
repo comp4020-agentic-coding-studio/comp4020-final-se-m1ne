@@ -2,126 +2,341 @@
   box-sizing: border-box;
 }
 
+/* --- Design tokens -----------------------------------------------------------
+   Every colour used by application chrome (session bar, ribbon, controls,
+   popover) is named here, never hardcoded at the point of use. The dark
+   override below replaces these same names, so no selector elsewhere needs to
+   duplicate itself per theme -- that duplication is exactly what a
+   custom-property system is for.
+
+   #canvas is the deliberate exception: its background is a literal colour in
+   the #canvas rule, not a token, specifically so there is nothing for the
+   dark override to touch. Canvas artwork must never be recoloured by theme. */
+:root {
+  --app-bg: #f3f3f3;
+  --workspace-bg: #ffffff;
+  --ribbon-bg: #f7f7f7;
+  --control-bg: #ffffff;
+  --control-hover-bg: #f0f0f0;
+  --control-active-bg: #e4e4e4;
+  --control-disabled-bg: #f3f3f3;
+  --control-disabled-border: #e4e4e4;
+  --selected-bg: #d9e8fb;
+  --selected-border: #8fb8e8;
+  --border: #e0e0e0;
+  --divider: #d8d8d8;
+  --text-primary: #1d1d1d;
+  --text-secondary: #5a5a5a;
+  --text-disabled: #a8a8a8;
+  --input-bg: #ffffff;
+  --input-border: #c8c8c8;
+  --focus-ring: #1e88e5;
+  --popover-bg: #ffffff;
+  --popover-border: #c8c8c8;
+  --popover-shadow: rgba(0, 0, 0, 0.18);
+  --swatch-selected-border: #1d1d1d;
+}
+
+:root[data-theme="dark"] {
+  --app-bg: #18181a;
+  --workspace-bg: #1f1f22;
+  --ribbon-bg: #232326;
+  --control-bg: #2b2b2f;
+  --control-hover-bg: #35353a;
+  --control-active-bg: #3f3f45;
+  --control-disabled-bg: #242427;
+  --control-disabled-border: #333338;
+  --selected-bg: #2a456b;
+  --selected-border: #5a9bd8;
+  --border: #333338;
+  --divider: #3a3a40;
+  --text-primary: #f0f0f2;
+  --text-secondary: #b7b7bd;
+  --text-disabled: #6c6c72;
+  --input-bg: #242427;
+  --input-border: #45454c;
+  --focus-ring: #6cb4ff;
+  --popover-bg: #222225;
+  --popover-border: #3a3a40;
+  --popover-shadow: rgba(0, 0, 0, 0.55);
+  --swatch-selected-border: #f0f0f2;
+}
+
 html,
 body {
   margin: 0;
   height: 100%;
   overflow: hidden;
   font-family: system-ui, sans-serif;
-  background: #fafafa;
+  background: var(--app-bg);
 }
 
-#canvas {
-  display: block;
-  width: 100%;
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* --- Workspace shell --------------------------------------------------------
+   One flat column for both Public and Private: action row, drawing ribbon,
+   then the canvas filling whatever is left. */
+#workspace {
+  display: flex;
+  flex-direction: column;
   height: 100%;
-  touch-action: none;
-  background: #ffffff;
 }
 
-#room-bar {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  /* Must out-rank #toolbar (also z-index 10, later in paint order): the
-     toolbar's natural width exceeds the gap to #room-bar on windows under
-     ~1300px wide, and without this it silently intercepts clicks meant for
-     #create-room-button. */
-  z-index: 11;
+/* --- Top action row ----------------------------------------------------------
+   History (Undo/Redo) on the left; theme toggle and session/collaboration
+   controls on the right. These two sides are deliberately different kinds of
+   action (editing history vs. collaboration/navigation) and are never merged
+   into one group. */
+#session-bar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  padding: 6px 14px;
   gap: 8px;
-  padding: 6px 10px;
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 999px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  background: var(--workspace-bg);
+  border-bottom: 1px solid var(--border);
   font-size: 0.85rem;
-  color: #1d1d1d;
+  color: var(--text-primary);
 }
 
-#public-room-controls,
-#private-room-controls {
+.action-group {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-/* The rule above's ID selector otherwise outranks the UA [hidden] rule, so
-   app.js setting .hidden on one of these groups had no visible effect. */
+#action-row-right {
+  gap: 14px;
+}
+
+.session-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#session-controls {
+  display: flex;
+  align-items: center;
+}
+
+/* A class selector is equal specificity to the UA [hidden] rule, so source
+   order alone would decide the conflict -- this override makes the hidden
+   state win unconditionally. */
 #public-room-controls[hidden],
 #private-room-controls[hidden] {
   display: none;
 }
 
-#create-room-button,
-#join-room-form button,
-#back-to-public {
-  padding: 4px 10px;
-  border: none;
-  border-radius: 999px;
-  background: #1d1d1d;
-  color: #fff;
+/* --- Shared "app button" family --------------------------------------------- */
+.app-button {
+  padding: 5px 12px;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  background: var(--control-bg);
+  color: var(--text-primary);
   font-size: 0.85rem;
+  font-family: inherit;
   cursor: pointer;
+  line-height: 1.2;
   text-decoration: none;
+  display: inline-block;
+}
+
+.app-button:hover {
+  background: var(--control-hover-bg);
+}
+
+.app-button:active {
+  background: var(--control-active-bg);
+}
+
+.app-button:disabled {
+  background: var(--control-disabled-bg);
+  color: var(--text-disabled);
+  border-color: var(--control-disabled-border);
+  cursor: default;
+}
+
+/* The theme toggle is an .app-button plus a small state dot -- no icon
+   library, just a CSS-drawn filled/outline circle so the current state reads
+   at a glance without relying on the text label alone. */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.theme-toggle::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-secondary);
+  background: transparent;
+}
+
+.theme-toggle[aria-pressed="true"]::before {
+  background: var(--text-primary);
+  border-color: var(--text-primary);
+}
+
+/* The room-code input and its Join button read as one fused control: shared
+   border, no visible gap, joined corners where the two pieces meet. */
+.join-control {
+  display: inline-flex;
+  align-items: stretch;
+  margin: 0;
+}
+
+.join-control #join-room-code {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+}
+
+.join-control button {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
 }
 
 #join-room-code {
   width: 6em;
   padding: 4px 8px;
-  border: 1px solid #ccc;
-  border-radius: 999px;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--text-primary);
   font-size: 0.85rem;
+  font-family: inherit;
   text-transform: uppercase;
 }
 
 #room-code-label {
   font-weight: 600;
   letter-spacing: 0.05em;
+  color: var(--text-primary);
 }
 
-#toolbar {
-  position: fixed;
-  top: 12px;
-  left: 12px;
-  z-index: 10;
+/* --- Drawing ribbon ---------------------------------------------------------
+   Compact groups (Tools, Size, Colours), left to right, each with a small
+   label to read as a Paint-like ribbon rather than a row of plain HTML
+   controls. Separated by thin dividers; wraps onto additional rows on its own
+   at narrow widths. */
+#tool-ribbon {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 10px;
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 999px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 6px 14px;
+  background: var(--ribbon-bg);
+  border-bottom: 1px solid var(--border);
 }
 
-#tool-mode {
+.ribbon-group {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 2px 14px;
+}
+
+.ribbon-group:not(:first-child) {
+  border-left: 1px solid var(--divider);
+}
+
+.ribbon-group:first-child {
+  padding-left: 0;
+}
+
+.group-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.group-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#tool-group .group-controls {
   gap: 4px;
 }
 
 .tool-button {
-  padding: 4px 10px;
-  border: none;
-  border-radius: 999px;
-  background: #eee;
-  color: #1d1d1d;
+  width: 64px;
+  padding: 6px 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
   font-size: 0.85rem;
+  font-family: inherit;
   cursor: pointer;
+  text-align: center;
+}
+
+.tool-button:hover {
+  background: var(--control-hover-bg);
 }
 
 .tool-button.selected {
-  background: #1d1d1d;
-  color: #fff;
+  background: var(--selected-bg);
+  border-color: var(--selected-border);
+}
+
+/* The slider and its numeric readout read as one fused widget: a shared
+   control-coloured housing rather than two loose elements side by side. */
+.size-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  background: var(--control-bg);
+}
+
+#tool-size-slider {
+  width: 110px;
+}
+
+#tool-size-value {
+  min-width: 2.6em;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  text-align: right;
 }
 
 #palette {
   display: flex;
-  gap: 8px;
+  gap: 5px;
+}
+
+/* The passive current-colour display: purely informational, never a click
+   target for the popover -- Edit colour is the only trigger now, so there is
+   nothing left for the user to have to guess about. */
+#colour-current {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid var(--input-border);
+  background: #1d1d1d;
+  flex-shrink: 0;
 }
 
 .swatch {
-  width: 28px;
-  height: 28px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: 2px solid transparent;
   border-radius: 50%;
@@ -130,41 +345,27 @@ body {
 }
 
 .swatch.selected {
-  border-color: #1d1d1d;
+  border-color: var(--swatch-selected-border);
 }
 
-.custom-swatch {
-  display: block;
-  position: relative;
-  /* updated to the picker's current value via JS, so this circle always
-     shows the selected custom colour rather than a fixed icon */
-  background: #1d1d1d;
+/* Applied to #colour-group while the Eraser is active: a visual hint that
+   colour doesn't apply to the current tool, without disabling the controls
+   and without any layout shift. */
+.colour-controls-dimmed {
+  opacity: 0.55;
 }
 
-/* small "+" in the corner is the only hint that this swatch opens a picker,
-   rather than selecting a fixed colour like the presets beside it */
-.custom-swatch::after {
-  content: "+";
-  position: absolute;
-  right: -1px;
-  bottom: -4px;
-  font-size: 13px;
-  line-height: 1;
-  color: #fff;
-  text-shadow: 0 0 2px rgba(0, 0, 0, 0.7);
-  pointer-events: none;
-}
-
-.custom-swatch input[type="color"] {
-  position: absolute;
-  inset: 0;
+/* --- Canvas ----------------------------------------------------------------
+   The single largest element on the page. Its background is a literal colour,
+   deliberately NOT a token -- theme must never invert or alter canvas
+   artwork, and keeping this rule untokenized is what guarantees that. */
+#canvas {
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
-  height: 100%;
-  padding: 0;
-  border: none;
-  cursor: pointer;
-  background: none;
-  opacity: 0;
+  display: block;
+  touch-action: none;
+  background: #ffffff;
 }
 
 #tool-cursor {
@@ -179,14 +380,250 @@ body {
   pointer-events: none;
 }
 
-#tool-size {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.85rem;
-  color: #1d1d1d;
+/* --- Colour popover ----------------------------------------------------------
+   Restyled to read as integrated application chrome -- the same tokens as the
+   rest of the ribbon -- rather than a plain browser form pasted over the
+   canvas. None of the colour logic below (hue ring, SV square, RGB/HSV
+   fields) changes here, only presentation. */
+#colour-popover {
+  position: fixed;
+  z-index: 30;
+  width: 232px;
+  background: var(--popover-bg);
+  border: 1px solid var(--popover-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--popover-shadow);
+  padding: 10px;
+  font-size: 0.8rem;
+  color: var(--text-primary);
 }
 
-#tool-size-value {
-  min-width: 2.5em;
+#colour-popover[hidden] {
+  display: none;
+}
+
+#colour-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--divider);
+}
+
+#colour-popover-close {
+  border: none;
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+#colour-popover-close:hover {
+  background: var(--control-hover-bg);
+}
+
+#colour-popover-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+#colour-wheel {
+  touch-action: none;
+  cursor: crosshair;
+}
+
+#colour-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+#colour-preview-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid var(--input-border);
+  flex-shrink: 0;
+}
+
+#colour-preview-hex {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+}
+
+.colour-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.colour-field {
+  display: grid;
+  grid-template-columns: 14px 1fr 48px;
+  align-items: center;
+  gap: 6px;
+}
+
+.colour-field label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+/* Colour-informative slider tracks: each RGB/HSV slider's track is a
+   gradient between the two colours you'd actually get by dragging that
+   slider to its min/max, holding every other channel at its current value --
+   not a generic grey range or a fixed black-to-primary ramp. The R/G/B and
+   S/V gradients are dynamic (recomputed in syncColourUI from the live
+   brushColor/pickerHue and written onto --grad-start/--grad-end here); the H
+   track is the one fixed case -- the full hue spectrum never depends on the
+   current colour, so it's a static gradient in CSS rather than something
+   syncColourUI needs to touch.
+   --grad-start/--grad-end default to a neutral grey only so the track isn't
+   invisible before syncColourUI's first run; every real paint overrides them. */
+.colour-field input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 14px;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  --grad-start: #808080;
+  --grad-end: #808080;
+}
+
+.colour-field input[type="range"]::-webkit-slider-runnable-track {
+  height: 14px;
+  border-radius: 3px;
+  background: linear-gradient(to right, var(--grad-start), var(--grad-end));
+}
+
+.colour-field input[type="range"]::-moz-range-track {
+  height: 14px;
+  border-radius: 3px;
+  background: linear-gradient(to right, var(--grad-start), var(--grad-end));
+  border: none;
+}
+
+/* The H slider's track never varies with the current colour -- it always
+   shows the full spectrum a hue-only control can select -- so it's hardcoded
+   here rather than computed in JS. Both vendor track pseudo-elements get
+   their own copy since neither can inherit the other's background through
+   the shared element. */
+#hsv-h-slider::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    #ff0000 0%,
+    #ffff00 17%,
+    #00ff00 33%,
+    #00ffff 50%,
+    #0000ff 67%,
+    #ff00ff 83%,
+    #ff0000 100%
+  );
+}
+
+#hsv-h-slider::-moz-range-track {
+  background: linear-gradient(
+    to right,
+    #ff0000 0%,
+    #ffff00 17%,
+    #00ff00 33%,
+    #00ffff 50%,
+    #0000ff 67%,
+    #ff00ff 83%,
+    #ff0000 100%
+  );
+}
+
+/* A restrained, Paint-like thumb: a plain filled circle with a border dark
+   enough to read over a bright gradient stop and a light outer ring so it
+   also reads over a dark one -- visible over any track colour without
+   growing past the size the generic app sliders already use. */
+.colour-field input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 0;
+  border-radius: 50%;
+  background: var(--control-bg);
+  border: 2px solid var(--text-primary);
+  box-shadow: 0 0 0 1px var(--popover-bg);
+  cursor: pointer;
+}
+
+.colour-field input[type="range"]::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--control-bg);
+  border: 2px solid var(--text-primary);
+  box-shadow: 0 0 0 1px var(--popover-bg);
+  cursor: pointer;
+}
+
+.colour-field input[type="range"]:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.colour-field input[type="range"]:focus-visible::-moz-range-thumb {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.colour-field input[type="number"] {
+  width: 48px;
+  padding: 3px 4px;
+  font-size: 0.75rem;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-family: inherit;
+}
+
+/* --- Responsive foundation ---------------------------------------------------
+   At narrow viewports the ribbon already wraps on its own (flex-wrap above);
+   this block only shrinks the few controls that would otherwise overflow a
+   ~390px width, and turns the popover into a bottom-anchored overlay sheet. */
+@media (max-width: 600px) {
+  #session-bar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  #tool-size-slider {
+    width: 80px;
+  }
+
+  .ribbon-group {
+    padding: 2px 10px;
+  }
+
+  #colour-popover {
+    position: fixed !important;
+    left: 12px !important;
+    right: 12px !important;
+    top: auto !important;
+    bottom: 12px !important;
+    width: auto !important;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+
+  .colour-field {
+    grid-template-columns: 14px 1fr 44px;
+  }
 }
