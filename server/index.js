@@ -4,7 +4,15 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getOrSetAnonId } from "./anon.js";
-import { createRoom, insertOp, listOps, roomExists } from "./db.js";
+import {
+  abandonRedoBranch,
+  createRoom,
+  insertOp,
+  listOps,
+  redoLatestOwnOp,
+  roomExists,
+  undoLatestOwnOp,
+} from "./db.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -66,6 +74,12 @@ function handleDraw(req, res, roomId) {
     roomId,
   };
   const seq = insertOp(op);
+  // A fresh edit abandons this owner's own remaining redo branch in this
+  // scope (conventional editor behaviour: undo, undo, then draw something new
+  // means the undone-but-not-yet-redone step is gone for good). Runs for
+  // Public (roomId null) exactly the same as for a room -- abandonRedoBranch
+  // scopes by `room_id IS ?`, so this can never reach into a different scope.
+  abandonRedoBranch(roomId, op.ownerId);
   res.status(201).json({ ...op, seq });
 }
 
@@ -97,11 +111,35 @@ function handleErase(req, res, roomId) {
     roomId,
   };
   const seq = insertOp(op);
+  // See the matching comment in handleDraw: a fresh edit abandons this
+  // owner's own remaining redo branch in this scope, Public and room alike.
+  abandonRedoBranch(roomId, op.ownerId);
   res.status(201).json({ ...op, seq });
 }
 
 app.post("/api/ops/draw", (req, res) => handleDraw(req, res, null));
 app.post("/api/ops/erase", (req, res) => handleErase(req, res, null));
+
+// Undo/redo for the Public Canvas. Same contract as the Private room routes
+// below: an empty body -- no opId, ownerId, or roomId field anywhere in the
+// request shape -- because there is nothing here for a client to choose.
+// ownerId always comes from the same httpOnly anon cookie every draw/erase
+// already trusts; the scope is always the Public scope (roomId = null),
+// never anything from the request. The op actually affected is found
+// entirely from authoritative DB state (undoLatestOwnOp/redoLatestOwnOp,
+// server/db.js), scoped to exactly (null, ownerId), so one Public
+// participant can never undo another's op, and this can never reach into any
+// room's ops. A no-op (nothing left to undo/redo) is not an error: `op` is
+// simply null, same status code either way.
+app.post("/api/ops/undo", (req, res) => {
+  const ownerId = getOrSetAnonId(req, res);
+  res.status(200).json({ op: undoLatestOwnOp(null, ownerId) });
+});
+
+app.post("/api/ops/redo", (req, res) => {
+  const ownerId = getOrSetAnonId(req, res);
+  res.status(200).json({ op: redoLatestOwnOp(null, ownerId) });
+});
 
 // Room codes are generated uppercase (server/db.js); normalizing here means a
 // code typed or linked in any case still resolves to the one canonical room.
@@ -151,6 +189,31 @@ app.post("/api/rooms/:code/ops/erase", (req, res) => {
     return;
   }
   handleErase(req, res, code);
+});
+
+// Same contract as the Public /api/ops/undo and /api/ops/redo above, scoped
+// to this room instead of the Public scope: roomId comes from the validated
+// :code param (post-roomExists, same 404 gate every other room route uses),
+// never the request body, so one room can never reach into another room's or
+// the Public Canvas's ops.
+app.post("/api/rooms/:code/undo", (req, res) => {
+  const code = normalizeRoomCode(req.params.code);
+  if (!roomExists(code)) {
+    res.status(404).json({ error: "no such room" });
+    return;
+  }
+  const ownerId = getOrSetAnonId(req, res);
+  res.status(200).json({ op: undoLatestOwnOp(code, ownerId) });
+});
+
+app.post("/api/rooms/:code/redo", (req, res) => {
+  const code = normalizeRoomCode(req.params.code);
+  if (!roomExists(code)) {
+    res.status(404).json({ error: "no such room" });
+    return;
+  }
+  const ownerId = getOrSetAnonId(req, res);
+  res.status(200).json({ op: redoLatestOwnOp(code, ownerId) });
 });
 
 // Serves the exact same canvas shell express.static would have served at /,

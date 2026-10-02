@@ -51,6 +51,24 @@ if (!columnExists("ops", "room_id")) {
   db.exec("ALTER TABLE ops ADD COLUMN room_id TEXT");
 }
 
+// Undo/redo lifecycle, additive and idempotent like room_id above. `active`
+// gates replay membership (see listOps below): every pre-existing row gets
+// DEFAULT 1 automatically, so nothing already drawn is affected by this
+// migration landing. `undo_order` is NULL except on a row that is currently
+// undone-and-redoable -- see undoLatestOwnOp/redoLatestOwnOp/abandonRedoBranch
+// for the three states this pair of columns encodes:
+//   active=1                      -> participates in replay (the normal case)
+//   active=0, undo_order NOT NULL -> undone, still redoable (Ctrl+Y can bring it back)
+//   active=0, undo_order IS NULL  -> permanently abandoned (a later own-edit
+//                                    superseded it; history keeps the row, but
+//                                    it can never be redone again)
+if (!columnExists("ops", "active")) {
+  db.exec("ALTER TABLE ops ADD COLUMN active INTEGER NOT NULL DEFAULT 1");
+}
+if (!columnExists("ops", "undo_order")) {
+  db.exec("ALTER TABLE ops ADD COLUMN undo_order INTEGER");
+}
+
 // A room is just its code plus when it was created -- no name, owner,
 // membership, or settings: nothing this slice needs. A room's existence here
 // is also what lets "is this a real room?" be answered before ever touching
@@ -129,12 +147,107 @@ export function insertOp({ id, ownerId, kind, color, size, points, createdAt, ro
 
 // `room_id IS ?` (not `=`) so a null roomId correctly matches the Public
 // Canvas rows (`=` never matches NULL in SQL) while a room code still matches
-// exactly like `=` would -- one query shape serves both scopes.
+// exactly like `=` would -- one query shape serves both scopes. `active = 1`
+// applies identically to both scopes too: Public Canvas has no undo/redo route
+// (see server/index.js), so its rows never become inactive and this filter is
+// a no-op there -- it's the same replay-membership rule everywhere, not a
+// second semantics introduced for rooms.
 export function listOps(roomId = null) {
   const rows = db
-    .prepare("SELECT seq, id, owner_id, kind, color, size, points, created_at, room_id FROM ops WHERE room_id IS ? ORDER BY seq ASC")
+    .prepare(
+      "SELECT seq, id, owner_id, kind, color, size, points, created_at, room_id FROM ops WHERE room_id IS ? AND active = 1 ORDER BY seq ASC",
+    )
     .all(roomId);
   return rows.map(rowToOp);
+}
+
+const OP_COLUMNS = "seq, id, owner_id, kind, color, size, points, created_at, room_id";
+
+// `room_id IS ?` (not `=`), exactly like listOps above: a null roomId (the
+// Public scope) must match rows where room_id is actually NULL, and `=`
+// never matches NULL in SQL -- it would silently find nothing for Public and
+// make every Public undo/redo/abandon a permanent no-op. A non-null roomId
+// still matches exactly like `=` would, so this one query shape correctly
+// serves both scopes, the same way listOps already does.
+const findLatestActiveOwnOpStmt = db.prepare(
+  `SELECT ${OP_COLUMNS} FROM ops WHERE room_id IS ? AND owner_id = ? AND active = 1 ORDER BY seq DESC LIMIT 1`,
+);
+
+const findLatestRedoableOwnOpStmt = db.prepare(
+  `SELECT ${OP_COLUMNS} FROM ops WHERE room_id IS ? AND owner_id = ? AND active = 0 AND undo_order IS NOT NULL ORDER BY undo_order DESC LIMIT 1`,
+);
+
+// The deterministic ordering primitive for redo's LIFO order (see the
+// module comment above for the three active/undo_order states). Never
+// Date.now(): two undo requests inside the same millisecond would tie under
+// a wall-clock marker, and wall-clock time is not guaranteed monotonic across
+// process/clock adjustments anyway. Instead this reads the current max
+// undo_order across the whole table and writes back max+1, in the same
+// single UPDATE statement -- safe without a transaction or a separate
+// counter table because DatabaseSync is fully synchronous and this module
+// runs single-threaded (the same guarantee `seq`'s own AUTOINCREMENT already
+// relies on, see above), so no second request's statement can ever interleave
+// between this statement's read of MAX(undo_order) and its write. The scope
+// is deliberately global (every room, every owner), not per-owner-per-room:
+// a single shared counter still produces the correct relative LIFO order
+// within any one (room, owner) subset, and avoids needing a second query
+// parameterized by room/owner just to compute it.
+const undoOpStmt = db.prepare(
+  "UPDATE ops SET active = 0, undo_order = (SELECT COALESCE(MAX(undo_order), 0) + 1 FROM ops) WHERE seq = ?",
+);
+
+const redoOpStmt = db.prepare("UPDATE ops SET active = 1, undo_order = NULL WHERE seq = ?");
+
+// Abandons every currently-redoable op this owner has in this scope -- called
+// once a new draw/erase from them actually persists (see handleDraw/
+// handleErase), for both the Public scope (roomId null) and any room. Only
+// rows with undo_order still set are touched (an already-abandoned row has
+// nothing left to clear), and the scope is exactly (room_id IS ?, owner_id),
+// so another owner's redo branch, this same owner's branch in a different
+// room, or this same owner's Private branch when a Public edit just
+// persisted (or vice versa), is never touched.
+const abandonRedoBranchStmt = db.prepare(
+  "UPDATE ops SET undo_order = NULL WHERE room_id IS ? AND owner_id = ? AND active = 0 AND undo_order IS NOT NULL",
+);
+
+// Undoes this owner's own most-recent currently-active op in this scope, and
+// only that op -- found by (room_id IS ?, owner_id, active=1) ordered by seq
+// DESC, never by anything the caller supplies (see server/index.js's routes,
+// which pass roomId = null for Public or a validated :code for a room, and
+// ownerId from the anon cookie, nothing else). Returns the now-inactive op
+// (same shape listOps returns), or null if this owner has nothing active
+// left to undo. createdAt is never written by undoOpStmt below, so the
+// returned op's createdAt is exactly what it was originally stamped with --
+// undoing never touches fade age.
+export function undoLatestOwnOp(roomId, ownerId) {
+  const row = findLatestActiveOwnOpStmt.get(roomId, ownerId);
+  if (!row) return null;
+  undoOpStmt.run(row.seq);
+  return rowToOp(row);
+}
+
+// Redoes this owner's most recently undone, still-redoable op in this scope
+// (Public when roomId is null, otherwise that room) -- true LIFO by
+// undo_order (not by seq: after two consecutive undos the lower-seq op can be
+// the one undone most recently, see the worked example in the architecture
+// report). Crucially this reactivates the SAME row -- same id, same seq, same
+// owner, same created_at, same geometry, same kind -- never inserts a new op.
+// redoOpStmt below only ever writes active/undo_order, so created_at is
+// physically untouched: a Public op's fade age keeps counting from its
+// original createdAt regardless of how long it spent undone, and redoing an
+// op that has already fully faded (fadeOpacity <= 0) brings it back into
+// persisted/active history without making it visible again. Not touching seq
+// also means its original position in the global seq-ordered replay is
+// exactly where it lands back.
+export function redoLatestOwnOp(roomId, ownerId) {
+  const row = findLatestRedoableOwnOpStmt.get(roomId, ownerId);
+  if (!row) return null;
+  redoOpStmt.run(row.seq);
+  return rowToOp(row);
+}
+
+export function abandonRedoBranch(roomId, ownerId) {
+  abandonRedoBranchStmt.run(roomId, ownerId);
 }
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O, 1/I/L

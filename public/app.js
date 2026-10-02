@@ -14,6 +14,8 @@ const joinRoomCodeInput = document.getElementById("join-room-code");
 const publicRoomControls = document.getElementById("public-room-controls");
 const privateRoomControls = document.getElementById("private-room-controls");
 const roomCodeLabel = document.getElementById("room-code-label");
+const undoButton = document.getElementById("undo-button");
+const redoButton = document.getElementById("redo-button");
 
 // The one place "which canvas is this" is decided: a room page is served at
 // /room/CODE (server/index.js's GET /room/:code, which 404s before ever
@@ -26,6 +28,11 @@ const isPublicCanvas = roomCode === null;
 const opsUrl = roomCode ? `/api/rooms/${roomCode}/ops` : "/api/ops";
 const drawUrl = roomCode ? `/api/rooms/${roomCode}/ops/draw` : "/api/ops/draw";
 const eraseUrl = roomCode ? `/api/rooms/${roomCode}/ops/erase` : "/api/ops/erase";
+// Same Public/Private split as opsUrl/drawUrl/eraseUrl above: both scopes
+// have their own server route (server/index.js), reusing the exact same
+// undo/redo DB logic underneath, so this is the only branch point needed.
+const undoUrl = roomCode ? `/api/rooms/${roomCode}/undo` : "/api/ops/undo";
+const redoUrl = roomCode ? `/api/rooms/${roomCode}/redo` : "/api/ops/redo";
 
 // Each owner gets its own off-screen raster layer: a private <canvas> that
 // only that owner's ops are ever replayed onto. Draw ops paint with
@@ -110,6 +117,20 @@ let frameHandle = null; // requestAnimationFrame handle for the next scheduled r
 // allOps. This is what makes "local feedback never waits on persistence" true
 // even across an unrelated repaint, not just immediately after pointerup.
 let pendingOps = []; // finished[] -- same shape as `current`, minus points still streaming in
+
+// Best-effort local count of this owner's own ops that are currently undone
+// and still redoable in this room. There is no endpoint to ask the server
+// "how many of my ops are redoable right now" (listOps only ever returns
+// active ops, per the architecture's Correction 2), so this is tracked
+// client-side instead: incremented on a successful undo response, decremented
+// on a successful redo response, and reset to 0 both on page load (a fresh
+// load has no way to know what a previous session left redoable) and the
+// instant any of this owner's own draw/erase ops actually persists in this
+// room (the server's abandonRedoBranch has just cleared that branch for real,
+// see server/index.js's handleDraw/handleErase). canUndo, by contrast, needs
+// no such tracking: opsByOwner already reflects exactly this owner's current
+// active ops, so its length is always correct without any extra bookkeeping.
+let myRedoCount = 0;
 
 function resizeCanvas() {
   canvas.width = canvas.clientWidth;
@@ -423,6 +444,7 @@ function beginGesture(kind, point) {
   };
   currentLastRenderedIndex = 0;
   renderCurrentDelta();
+  updateUndoRedoButtons(); // a gesture just became pending -- disable until it resolves
 }
 
 function appendToGesture(points) {
@@ -467,6 +489,11 @@ async function persistGesture(finished) {
     // future resize/reload. No re-render here: the server never recomputes
     // or transforms this op's geometry, so there is nothing that could
     // disagree with what's already on screen, and so nothing to pop.
+    // This owner's remaining redo branch in this scope was just abandoned
+    // server-side (see handleDraw/handleErase's abandonRedoBranch call) --
+    // mirror that locally so the Redo button doesn't stay enabled for a
+    // branch that no longer exists. Unconditional: Public and Private alike.
+    myRedoCount = 0;
   } catch {
     // Best-effort; the gesture is already visible locally even if this
     // particular persistence call failed.
@@ -477,6 +504,7 @@ async function persistGesture(finished) {
     // exactly as visible as it already was, which is the pre-existing
     // best-effort contract above, not something this gap-closing fix changes.
     if (finished.kind === "draw") pendingOps = pendingOps.filter((op) => op !== finished);
+    updateUndoRedoButtons();
   }
 }
 
@@ -496,7 +524,53 @@ function endGesture() {
   // persistGesture's op landing in allOps must still find this gesture
   // somewhere to paint, since allOps itself doesn't have it yet.
   if (finished.kind === "draw") pendingOps.push(finished);
+  updateUndoRedoButtons();
   persistGesture(finished);
+}
+
+// True whenever an unconfirmed gesture exists: either still being dragged
+// (`current`) or finished locally but not yet confirmed persisted
+// (`pendingOps`). Undo/redo must never race one of these -- the server-side
+// "latest active op" or "latest redoable op" it would act on could change the
+// instant persistGesture's response lands, which is exactly the ambiguity
+// this guard exists to avoid.
+function hasPendingGesture() {
+  return current !== null || pendingOps.length > 0;
+}
+
+// Shared by Public and Private alike. canUndo is read directly off
+// opsByOwner -- the exact set of this owner's currently active ops in this
+// scope, already kept correct by every loadOps()/persistGesture call -- so it
+// needs no separate tracking. canRedo relies on myRedoCount (see its
+// declaration above) since that information doesn't otherwise exist on the
+// client.
+function updateUndoRedoButtons() {
+  const pending = hasPendingGesture();
+  const myOwnOps = opsByOwner.get(myOwnerId) ?? [];
+  undoButton.disabled = pending || myOwnOps.length === 0;
+  redoButton.disabled = pending || myRedoCount <= 0;
+}
+
+async function performUndo() {
+  if (hasPendingGesture()) return;
+  const res = await fetch(undoUrl, { method: "POST" });
+  if (!res.ok) return;
+  const { op } = await res.json();
+  if (!op) return; // nothing left to undo -- not an error, just a no-op
+  myRedoCount += 1;
+  await loadOps(); // reloads authoritative active ops and repaints via the existing engine -- no alternate replay path
+  updateUndoRedoButtons();
+}
+
+async function performRedo() {
+  if (hasPendingGesture()) return;
+  const res = await fetch(redoUrl, { method: "POST" });
+  if (!res.ok) return;
+  const { op } = await res.json();
+  if (!op) return; // nothing left to redo
+  myRedoCount = Math.max(0, myRedoCount - 1);
+  await loadOps();
+  updateUndoRedoButtons();
 }
 
 canvas.addEventListener("pointerdown", (event) => {
@@ -615,9 +689,36 @@ if (isPublicCanvas) {
   roomCodeLabel.textContent = `Room: ${roomCode}`;
 }
 
+undoButton.addEventListener("click", performUndo);
+redoButton.addEventListener("click", performRedo);
+
+// Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z, shared by Public and Private alike -- one
+// listener, not a separate implementation per scope. performUndo/performRedo
+// already resolve against whichever scope's undoUrl/redoUrl was derived
+// above, so there is nothing here that needs to branch on isPublicCanvas.
+window.addEventListener("keydown", (event) => {
+  if (!(event.ctrlKey || event.metaKey)) return;
+  const target = document.activeElement;
+  // Never hijack typing -- e.g. the Join-room code field on the Public
+  // Canvas, or any future text input on a room page.
+  if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+
+  const key = event.key.toLowerCase();
+  if (key === "z" && event.shiftKey) {
+    event.preventDefault();
+    performRedo();
+  } else if (key === "z") {
+    event.preventDefault();
+    performUndo();
+  } else if (key === "y") {
+    event.preventDefault();
+    performRedo();
+  }
+});
+
 resizeCanvas();
 setMode(mode);
-loadMe().then(loadOps); // ownership must be known before a layer can be attributed to "my own"
+loadMe().then(loadOps).then(updateUndoRedoButtons); // ownership must be known before a layer can be attributed to "my own"
 
 // Exists solely to animate the Public Canvas's fade -- a Private Room's
 // effectiveOpacity never changes with time, so there is nothing for a
