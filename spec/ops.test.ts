@@ -188,3 +188,40 @@ it("refresh reproduces the same operation history", async () => {
   const second = await getOps();
   expect(second).toEqual(first);
 });
+
+// createdAt is the one piece of server-authoritative data the public-canvas
+// fade feature (public/fade.js) depends on: it must come from the server's
+// own clock at insert time, never from anything the client claims, or a
+// participant could make old content read as freshly drawn (or the reverse)
+// just by lying in the request body. draw/erase both already construct their
+// op literal with createdAt: Date.now() unconditionally and never read a
+// createdAt out of req.body -- this pins that down as a contract, not an
+// incidental implementation detail.
+it("a client-supplied createdAt in the request body is ignored; the server always stamps its own", async () => {
+  const before = Date.now();
+  const draw = {
+    color: "#3949ab",
+    width: 0.02,
+    points: [{ x: 0.15, y: 0.15 }],
+    createdAt: before - 10 * 24 * 60 * 60 * 1000, // ten days in the past, deliberately implausible
+  };
+  const posted = await postDraw(draw);
+  const after = Date.now();
+
+  expect(posted.body.createdAt).not.toBe(draw.createdAt);
+  expect(posted.body.createdAt).toBeGreaterThanOrEqual(before);
+  expect(posted.body.createdAt).toBeLessThanOrEqual(after);
+});
+
+// The fade feature computes a draw's current opacity purely from createdAt
+// (age = now - createdAt), so createdAt must reproduce exactly, unchanged,
+// across a persist-then-refetch cycle -- the same guarantee every other
+// field on an op already has.
+it("a posted draw op's createdAt round-trips unchanged through GET /api/ops", async () => {
+  const posted = await postDraw({ color: "#00897b", width: 0.015, points: [{ x: 0.6, y: 0.6 }] });
+
+  const after = await getOps();
+  const found = after.find((op) => op.id === posted.body.id);
+  expect(found).toBeTruthy();
+  expect(found!.createdAt).toBe(posted.body.createdAt);
+});

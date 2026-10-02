@@ -1,3 +1,5 @@
+import { fadeOpacity } from "./fade.js";
+
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const toolCursor = document.getElementById("tool-cursor");
@@ -199,13 +201,26 @@ function repaintVisibleCanvas(region) {
   ctx.clearRect(rx, ry, rw, rh);
   const { canvas: scratchCanvas, ctx: scratchCtx } = ensureScratch();
   const clipRect = region ? { x: rx, y: ry, width: rw, height: rh } : null;
+  const now = Date.now(); // one shared instant for every op in this repaint, so nothing within a single pass can disagree
   for (const op of allOps) {
-    if (op.kind !== "draw") continue; // an erase op's only effect is already baked into its owner's layer, below
+    if (op.kind !== "draw") continue; // an erase op's only effect is already baked into its owner's layer, below, and never fades
+    // Fading is applied here, and only here: to a draw op's own stroke color,
+    // right before it gets clipped against its owner's layer mask below. The
+    // mask itself (built in rebuildLayerFromOps) is never faded -- it stays
+    // permanent and full-strength, so an owner can always erase a faded or
+    // fully-invisible stroke exactly as if it were new, and nothing erased
+    // can ever reappear by aging back into visibility. A fully-faded op is
+    // skipped outright here -- still persisted (see public/fade.js), just no
+    // longer painted.
+    const opacity = fadeOpacity(op.createdAt, now);
+    if (opacity <= 0) continue;
     if (clipRect && !rectsIntersect(opPixelBounds(op), clipRect)) continue; // this op can't paint inside the dirty region at all
     const ownerLayer = layers.get(op.ownerId);
     if (!ownerLayer) continue;
     scratchCtx.clearRect(rx, ry, rw, rh);
+    scratchCtx.globalAlpha = opacity;
     renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points);
+    scratchCtx.globalAlpha = 1;
     scratchCtx.globalCompositeOperation = "destination-in";
     scratchCtx.drawImage(ownerLayer.canvas, rx, ry, rw, rh, rx, ry, rw, rh);
     scratchCtx.globalCompositeOperation = "source-over";
@@ -495,3 +510,16 @@ window.addEventListener("resize", () => {
 resizeCanvas();
 setMode(mode);
 loadMe().then(loadOps); // ownership must be known before a layer can be attributed to "my own"
+
+// Fades are extremely slow (2 percentage points per 15 minutes -- see
+// public/fade.js), so a 1Hz tick is far more than enough to look continuous;
+// nowhere near the cost of a per-frame animation loop. Skipped entirely while
+// a gesture is in progress (current !== null): that gesture's own rendering
+// (renderCurrentDelta, and endGesture's reconciliation repaint) is already
+// authoritative for every pixel it touches, and an unrelated full repaint
+// firing mid-drag would only race it for no benefit. Normal fade repaint
+// resumes on the next tick once the gesture ends.
+setInterval(() => {
+  if (current) return;
+  repaintVisibleCanvas();
+}, 1000);

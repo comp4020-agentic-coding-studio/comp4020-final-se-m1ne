@@ -5,6 +5,13 @@
     "target": "ES2023",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // spec/fade.test.ts imports public/fade.js directly (a pure function, no
+    // DOM/canvas) to unit-test it without a browser -- allowJs lets that one
+    // import resolve to real inferred types instead of implicit `any`,
+    // without pulling the rest of public/ or server/ (untyped by design, per
+    // the comment below) into checked scope, since nothing included here
+    // imports them.
+    "allowJs": true,
     // Imports name the file they mean, extension and all --- which is what
     // node itself wants when it runs a .ts file directly.
     "allowImportingTsExtensions": true,
