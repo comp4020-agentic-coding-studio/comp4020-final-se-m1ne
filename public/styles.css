@@ -54,7 +54,8 @@ body {
 }
 
 #create-room-button,
-#join-room-form button {
+#join-room-form button,
+#back-to-public {
   padding: 4px 10px;
   border: none;
   border-radius: 999px;
@@ -62,6 +63,7 @@ body {
   color: #fff;
   font-size: 0.85rem;
   cursor: pointer;
+  text-decoration: none;
 }
 
 #join-room-code {
@@ -76,10 +78,6 @@ body {
 #room-code-label {
   font-weight: 600;
   letter-spacing: 0.05em;
-}
-
-#back-to-public {
-  color: #1d1d1d;
 }
 
 #toolbar {

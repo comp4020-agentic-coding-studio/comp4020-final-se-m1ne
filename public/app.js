@@ -67,6 +67,17 @@ let current = null; // { kind: "draw" | "erase", color: string | null, size: num
 let currentLastRenderedIndex = 0;
 let frameHandle = null; // requestAnimationFrame handle for the next scheduled render, or null
 
+// Finished draw gestures that are already fully painted locally but whose
+// persistGesture() POST hasn't resolved yet, so they aren't in allOps (or
+// opsByOwner) for a from-scratch repaint to find. A full repaintVisibleCanvas
+// -- the 1Hz fade tick, a resize, anything -- can land in that gap at any
+// moment once `current` has already gone null, so repaintVisibleCanvas paints
+// these directly and unclipped, exactly like it does for `current`, until
+// persistGesture removes each one the instant its op actually lands in
+// allOps. This is what makes "local feedback never waits on persistence" true
+// even across an unrelated repaint, not just immediately after pointerup.
+let pendingOps = []; // finished[] -- same shape as `current`, minus points still streaming in
+
 function resizeCanvas() {
   canvas.width = canvas.clientWidth;
   canvas.height = canvas.clientHeight;
@@ -153,10 +164,18 @@ function rebuildLayerFromOps(ownerId) {
 
 function rebuildAllLayers() {
   for (const ownerId of opsByOwner.keys()) rebuildLayerFromOps(ownerId);
-  if (current && myOwnerId !== null) {
+  if (myOwnerId !== null) {
     const layer = ensureLayer(myOwnerId);
-    renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, current.points);
-    currentLastRenderedIndex = current.points.length - 1;
+    // Not yet in opsByOwner (persistGesture hasn't resolved), so
+    // rebuildLayerFromOps above can't have replayed these -- without this,
+    // a resize mid-persist would drop a pending gesture from the owner's own
+    // mask, and once persistence did land it'd render clipped away to
+    // nothing on the very next ops-driven repaint.
+    for (const op of pendingOps) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points);
+    if (current) {
+      renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, current.points);
+      currentLastRenderedIndex = current.points.length - 1;
+    }
   }
   repaintVisibleCanvas();
 }
@@ -246,11 +265,19 @@ function repaintVisibleCanvas(region) {
     scratchCtx.globalCompositeOperation = "source-over";
     ctx.drawImage(scratchCanvas, rx, ry, rw, rh, rx, ry, rw, rh);
   }
-  if (current && current.kind === "draw" && myOwnerId !== null) {
-    // The in-progress gesture is always the newest content in existence, so
-    // it's always safe to paint it directly and unclipped on top of
-    // everything just replayed above.
-    renderPathOnLayer(ctx, "draw", current.color, current.size, current.points);
+  if (myOwnerId !== null) {
+    // Oldest-to-newest: each finished-but-unconfirmed gesture is strictly
+    // newer than the ones before it (it couldn't start until the last one
+    // ended), and the in-progress gesture, if any, is newer still -- so
+    // painting in this order and always unclipped reproduces the same
+    // stacking the eventual allOps-driven replay will show once persistence
+    // catches up, with nothing here waiting on it.
+    for (const op of pendingOps) {
+      renderPathOnLayer(ctx, "draw", op.color, op.size, op.points);
+    }
+    if (current && current.kind === "draw") {
+      renderPathOnLayer(ctx, "draw", current.color, current.size, current.points);
+    }
   }
 }
 
@@ -410,6 +437,13 @@ async function persistGesture(finished) {
   } catch {
     // Best-effort; the gesture is already visible locally even if this
     // particular persistence call failed.
+  } finally {
+    // Whether or not persistence succeeded, this gesture is no longer the
+    // thing standing between a from-scratch repaint and a blank spot where
+    // it used to be: on success allOps now replays it; on failure it's left
+    // exactly as visible as it already was, which is the pre-existing
+    // best-effort contract above, not something this gap-closing fix changes.
+    if (finished.kind === "draw") pendingOps = pendingOps.filter((op) => op !== finished);
   }
 }
 
@@ -424,6 +458,11 @@ function endGesture() {
   if (current.kind === "erase") repaintVisibleCanvas();
   const finished = current;
   current = null;
+  // Handed off to pendingOps before persistGesture's first await: a repaint
+  // triggered by anything (the fade tick, a resize) between here and
+  // persistGesture's op landing in allOps must still find this gesture
+  // somewhere to paint, since allOps itself doesn't have it yet.
+  if (finished.kind === "draw") pendingOps.push(finished);
   persistGesture(finished);
 }
 
@@ -551,15 +590,21 @@ resizeCanvas();
 setMode(mode);
 loadMe().then(loadOps); // ownership must be known before a layer can be attributed to "my own"
 
-// Fades are extremely slow (2 percentage points per 15 minutes -- see
-// public/fade.js), so a 1Hz tick is far more than enough to look continuous;
-// nowhere near the cost of a per-frame animation loop. Skipped entirely while
-// a gesture is in progress (current !== null): that gesture's own rendering
-// (renderCurrentDelta, and endGesture's reconciliation repaint) is already
-// authoritative for every pixel it touches, and an unrelated full repaint
-// firing mid-drag would only race it for no benefit. Normal fade repaint
-// resumes on the next tick once the gesture ends.
-setInterval(() => {
-  if (current) return;
-  repaintVisibleCanvas();
-}, 1000);
+// Exists solely to animate the Public Canvas's fade -- a Private Room's
+// effectiveOpacity never changes with time, so there is nothing for a
+// from-scratch repaint to pick up between one tick and the next, and running
+// it there anyway would just be a continuous, pointless source of full
+// repaints. Fades are extremely slow (2 percentage points per 15 minutes --
+// see public/fade.js), so a 1Hz tick is far more than enough to look
+// continuous; nowhere near the cost of a per-frame animation loop. Skipped
+// entirely while a gesture is in progress (current !== null): that gesture's
+// own rendering (renderCurrentDelta, and endGesture's reconciliation repaint)
+// is already authoritative for every pixel it touches, and an unrelated full
+// repaint firing mid-drag would only race it for no benefit. Normal fade
+// repaint resumes on the next tick once the gesture ends.
+if (isPublicCanvas) {
+  setInterval(() => {
+    if (current) return;
+    repaintVisibleCanvas();
+  }, 1000);
+}
