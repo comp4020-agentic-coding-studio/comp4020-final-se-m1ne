@@ -7,10 +7,12 @@ import { getOrSetAnonId } from "./anon.js";
 import {
   abandonRedoBranch,
   createRoom,
+  getActiveRoom,
   insertOp,
+  leavePresence,
   listOps,
+  recordHeartbeat,
   redoLatestOwnOp,
-  roomExists,
   undoLatestOwnOp,
 } from "./db.js";
 
@@ -148,16 +150,33 @@ function normalizeRoomCode(raw) {
 }
 
 // Only this route ever inserts into `rooms`. No other room-scoped route
-// creates one as a side effect of drawing, erasing, or reading.
+// creates one as a side effect of drawing, erasing, or reading. presenceId
+// comes from the client (its page-load's crypto.randomUUID(), never
+// localStorage/cookies) so the creator's very first presence lease lands in
+// the SAME transaction as the room row (see createRoom, server/db.js) --
+// there is no window where the room exists but nobody is present in it. A
+// client that omits presenceId (the existing spec/rooms.test.ts helper, and
+// any other caller that simply doesn't care about presence) still gets a
+// working room: the server mints a throwaway id for that one row itself.
+// ownerId is never read from the body -- always the same server-derived
+// anon cookie every other route already trusts.
 app.post("/api/rooms", (req, res) => {
-  const code = createRoom();
+  const { presenceId } = req.body ?? {};
+  const ownerId = getOrSetAnonId(req, res);
+  const code = createRoom(
+    typeof presenceId === "string" && presenceId.length > 0 ? presenceId : randomUUID(),
+    ownerId,
+  );
   res.status(201).json({ code });
 });
 
-// Existence check only -- 404 for an unknown code, and never creates one.
+// Existence check only -- 404 for an unknown or expired code, and never
+// creates one. getActiveRoom reconciles occupancy and physically deletes the
+// room first if it has expired, so an expired code 404s exactly like a code
+// that was never issued.
 app.get("/api/rooms/:code", (req, res) => {
   const code = normalizeRoomCode(req.params.code);
-  if (!roomExists(code)) {
+  if (!getActiveRoom(code)) {
     res.status(404).json({ error: "no such room" });
     return;
   }
@@ -166,7 +185,7 @@ app.get("/api/rooms/:code", (req, res) => {
 
 app.get("/api/rooms/:code/ops", (req, res) => {
   const code = normalizeRoomCode(req.params.code);
-  if (!roomExists(code)) {
+  if (!getActiveRoom(code)) {
     res.status(404).json({ error: "no such room" });
     return;
   }
@@ -175,7 +194,7 @@ app.get("/api/rooms/:code/ops", (req, res) => {
 
 app.post("/api/rooms/:code/ops/draw", (req, res) => {
   const code = normalizeRoomCode(req.params.code);
-  if (!roomExists(code)) {
+  if (!getActiveRoom(code)) {
     res.status(404).json({ error: "no such room" });
     return;
   }
@@ -184,7 +203,7 @@ app.post("/api/rooms/:code/ops/draw", (req, res) => {
 
 app.post("/api/rooms/:code/ops/erase", (req, res) => {
   const code = normalizeRoomCode(req.params.code);
-  if (!roomExists(code)) {
+  if (!getActiveRoom(code)) {
     res.status(404).json({ error: "no such room" });
     return;
   }
@@ -193,12 +212,12 @@ app.post("/api/rooms/:code/ops/erase", (req, res) => {
 
 // Same contract as the Public /api/ops/undo and /api/ops/redo above, scoped
 // to this room instead of the Public scope: roomId comes from the validated
-// :code param (post-roomExists, same 404 gate every other room route uses),
-// never the request body, so one room can never reach into another room's or
-// the Public Canvas's ops.
+// :code param (post-getActiveRoom, same 404 gate every other room route
+// uses), never the request body, so one room can never reach into another
+// room's or the Public Canvas's ops.
 app.post("/api/rooms/:code/undo", (req, res) => {
   const code = normalizeRoomCode(req.params.code);
-  if (!roomExists(code)) {
+  if (!getActiveRoom(code)) {
     res.status(404).json({ error: "no such room" });
     return;
   }
@@ -208,7 +227,7 @@ app.post("/api/rooms/:code/undo", (req, res) => {
 
 app.post("/api/rooms/:code/redo", (req, res) => {
   const code = normalizeRoomCode(req.params.code);
-  if (!roomExists(code)) {
+  if (!getActiveRoom(code)) {
     res.status(404).json({ error: "no such room" });
     return;
   }
@@ -216,12 +235,59 @@ app.post("/api/rooms/:code/redo", (req, res) => {
   res.status(200).json({ op: redoLatestOwnOp(code, ownerId) });
 });
 
+// Heartbeat: renews this one tab's presence lease. presenceId is the only
+// identity the client supplies -- ownerId always comes from the server-
+// derived anon cookie, never the body, so a client can never register a
+// lease under someone else's ownerId. Drawing/erasing ops never call this:
+// presence is renewed only by the dedicated 30s heartbeat (see
+// public/app.js), never as a side effect of drawing. Same not-found
+// semantics as every other room route if the room has expired.
+app.post("/api/rooms/:code/presence", (req, res) => {
+  const code = normalizeRoomCode(req.params.code);
+  const { presenceId } = req.body ?? {};
+  if (typeof presenceId !== "string" || presenceId.length === 0) {
+    res.status(400).json({ error: "presence requires a presenceId" });
+    return;
+  }
+  const ownerId = getOrSetAnonId(req, res);
+  const room = recordHeartbeat(code, presenceId, ownerId);
+  if (!room) {
+    res.status(404).json({ error: "no such room" });
+    return;
+  }
+  res.status(200).json({ ok: true });
+});
+
+// Proactive leave: removes exactly this one tab's presence lease before it
+// would otherwise go stale, so the room's occupancy (and, if this was the
+// last lease, empty_since) reflects an explicit Leave immediately rather
+// than only after STALE_TIMEOUT_MS. Optimization only -- the heartbeat
+// lease expiring on its own is still the correctness fallback for a closed
+// tab, a crash, or a lost network, none of which can call this. Scoped to
+// exactly this presenceId, never to ownerId, so one tab leaving never
+// affects another tab sharing the same browser/owner.
+app.post("/api/rooms/:code/leave", (req, res) => {
+  const code = normalizeRoomCode(req.params.code);
+  const { presenceId } = req.body ?? {};
+  if (typeof presenceId !== "string" || presenceId.length === 0) {
+    res.status(400).json({ error: "leave requires a presenceId" });
+    return;
+  }
+  const room = leavePresence(code, presenceId);
+  if (!room) {
+    res.status(404).json({ error: "no such room" });
+    return;
+  }
+  res.status(200).json({ ok: true });
+});
+
 // Serves the exact same canvas shell express.static would have served at /,
-// but only once the room is confirmed to exist -- an unknown code gets a 404
-// instead of a working canvas, and nothing here ever creates a room.
+// but only once the room is confirmed to exist -- an unknown or expired code
+// gets a 404 instead of a working canvas, and nothing here ever creates a
+// room.
 app.get("/room/:code", (req, res) => {
   const code = normalizeRoomCode(req.params.code);
-  if (!roomExists(code)) {
+  if (!getActiveRoom(code)) {
     res.status(404).type("html").send('<!doctype html>\n<meta charset="utf-8" />\n<p>No such room. <a href="/">Back to Public Canvas</a></p>');
     return;
   }

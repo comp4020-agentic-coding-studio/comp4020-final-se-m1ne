@@ -80,12 +80,57 @@ db.exec(`
   )
 `);
 
+// Additive, idempotent, like ops.room_id above. NULL means "occupied, or
+// never yet observed empty"; a non-NULL value is the instant (derived from
+// persisted presence evidence, see reconcileRoom) the room's last live lease
+// expired -- the anchor ROOM_EMPTY_EXPIRY_MS counts forward from, see below.
+if (!columnExists("rooms", "empty_since")) {
+  db.exec("ALTER TABLE rooms ADD COLUMN empty_since INTEGER");
+}
+
+// A lease, not a membership list: one row per (room, tab/page-load), reset on
+// every heartbeat. presence_id is never the artwork-owner identity (owner_id,
+// the same anon_id draw/erase ops already use) -- it only exists to let two
+// tabs from the same browser/owner be counted as two independent occupants,
+// so one tab closing never looks like its owner leaving entirely. No FK to
+// rooms: a room's deletion (expireRoom below) always deletes this table's
+// rows for that room_id first and explicitly, in the same transaction, so
+// nothing here is ever left pointing at a room that no longer exists.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS presence (
+    room_id TEXT NOT NULL,
+    presence_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    last_seen INTEGER NOT NULL,
+    PRIMARY KEY (room_id, presence_id)
+  )
+`);
+
+export const HEARTBEAT_INTERVAL_MS = 30_000;
+export const STALE_TIMEOUT_MS = 90_000;
+export const ROOM_EMPTY_EXPIRY_MS = 24 * 60 * 60 * 1000;
+
 const insertOpStmt = db.prepare(
   "INSERT INTO ops (id, owner_id, kind, color, size, points, created_at, room_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 );
 
 const insertRoomStmt = db.prepare("INSERT INTO rooms (id, created_at) VALUES (?, ?)");
-const roomExistsStmt = db.prepare("SELECT 1 FROM rooms WHERE id = ?");
+const selectRoomStmt = db.prepare("SELECT id, created_at, empty_since FROM rooms WHERE id = ?");
+const deleteRoomStmt = db.prepare("DELETE FROM rooms WHERE id = ?");
+const clearEmptySinceStmt = db.prepare("UPDATE rooms SET empty_since = NULL WHERE id = ?");
+const setEmptySinceStmt = db.prepare("UPDATE rooms SET empty_since = ? WHERE id = ?");
+
+const upsertPresenceStmt = db.prepare(`
+  INSERT INTO presence (room_id, presence_id, owner_id, last_seen)
+  VALUES (?, ?, ?, ?)
+  ON CONFLICT(room_id, presence_id) DO UPDATE SET owner_id = excluded.owner_id, last_seen = excluded.last_seen
+`);
+const livePresenceExistsStmt = db.prepare("SELECT 1 FROM presence WHERE room_id = ? AND last_seen >= ? LIMIT 1");
+const maxLastSeenStmt = db.prepare("SELECT MAX(last_seen) AS maxLastSeen FROM presence WHERE room_id = ?");
+const deleteStalePresenceStmt = db.prepare("DELETE FROM presence WHERE room_id = ? AND last_seen < ?");
+const deleteAllPresenceForRoomStmt = db.prepare("DELETE FROM presence WHERE room_id = ?");
+const deleteOnePresenceStmt = db.prepare("DELETE FROM presence WHERE room_id = ? AND presence_id = ?");
+const deleteOpsForRoomStmt = db.prepare("DELETE FROM ops WHERE room_id = ?");
 
 // One-time, idempotent: if an old `strokes` table (the pre-migration
 // vector-fragment model) is still present, every row in it is carried
@@ -261,23 +306,181 @@ function randomRoomCode() {
   return code;
 }
 
+// The single place "is this lease still live" gets decided: a presence row
+// counts as live iff it was last renewed within STALE_TIMEOUT_MS of `now`.
+// Everything below -- occupancy, empty_since derivation, reconciliation --
+// is built on this one threshold so there is exactly one definition of
+// staleness, not one per call site.
+//
+// Reconciles a room's occupancy bookkeeping against its persisted presence
+// evidence, strictly in this order: (1) decide live-vs-stale from last_seen
+// alone, nothing else; (2) if live presence exists, the room is occupied --
+// clear a stale empty_since if one is somehow still set, and it is now safe
+// to drop presence rows that are individually stale (the live row(s) are
+// evidence enough on their own); (3) if no live presence exists and
+// empty_since is still NULL, capture MAX(last_seen) as the occupancy-evidence
+// BEFORE deleting anything, and derive empty_since = maxLastSeen +
+// STALE_TIMEOUT_MS from it -- never from `now`, so a reconciliation that
+// happens to run hours late (the Fly machine was stopped, nobody touched the
+// room) does not drift empty_since forward; (4) if empty_since is already
+// set, it is left untouched -- reconciliation only ever establishes
+// empty_since once, it never recomputes it. Only after empty_since is either
+// confirmed set or correctly left alone do now-redundant stale rows actually
+// get deleted, so the timestamp evidence they represent is never destroyed
+// before it has been captured in empty_since.
+function reconcileRoom(roomId, now = Date.now()) {
+  const room = selectRoomStmt.get(roomId);
+  if (!room) return null;
+
+  db.exec("BEGIN");
+  try {
+    const staleThreshold = now - STALE_TIMEOUT_MS;
+    const isLive = livePresenceExistsStmt.get(roomId, staleThreshold) !== undefined;
+
+    if (isLive) {
+      if (room.empty_since !== null) {
+        clearEmptySinceStmt.run(roomId);
+        room.empty_since = null;
+      }
+      deleteStalePresenceStmt.run(roomId, staleThreshold);
+    } else {
+      if (room.empty_since === null) {
+        const { maxLastSeen } = maxLastSeenStmt.get(roomId);
+        if (maxLastSeen !== null) {
+          const emptySince = maxLastSeen + STALE_TIMEOUT_MS;
+          setEmptySinceStmt.run(emptySince, roomId);
+          room.empty_since = emptySince;
+        }
+      }
+      // No live presence remains, so every row still here is stale by
+      // definition -- and if empty_since needed capturing, it already was,
+      // above, before this line.
+      deleteAllPresenceForRoomStmt.run(roomId);
+    }
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+  return room;
+}
+
+// Inclusive boundary: a room that has been empty for exactly
+// ROOM_EMPTY_EXPIRY_MS is already expired, not "expiring next instant".
+function isRoomExpired(room, now = Date.now()) {
+  return room.empty_since !== null && now >= room.empty_since + ROOM_EMPTY_EXPIRY_MS;
+}
+
+// The exact transactional delete the architecture specifies: presence, then
+// ops, then the room itself, all three or none. Public ops (room_id IS NULL)
+// are never touched -- every statement here is scoped to this one roomId.
+function expireRoom(roomId) {
+  db.exec("BEGIN");
+  try {
+    deleteAllPresenceForRoomStmt.run(roomId);
+    deleteOpsForRoomStmt.run(roomId);
+    deleteRoomStmt.run(roomId);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+// The one entry point every room-gating route and lifecycle function uses to
+// ask "does this room exist right now": reconciles first (so empty_since
+// reflects reality before expiry is judged), then physically deletes the
+// room if it turns out to be expired. Either way an expired room comes back
+// as null -- indistinguishable from a room code that was never issued, which
+// is what makes an expired room 404 instead of silently reachable.
+export function getActiveRoom(code, now = Date.now()) {
+  const room = reconcileRoom(code, now);
+  if (!room) return null;
+  if (isRoomExpired(room, now)) {
+    expireRoom(code);
+    return null;
+  }
+  return room;
+}
+
 // Uniqueness is the database's job, not this function's: the PRIMARY KEY on
 // rooms.id is the actual authority. A generated code that collides makes the
 // INSERT fail, which is caught here only to retry with a fresh code -- never
-// to paper over some other kind of failure.
-export function createRoom() {
+// to paper over some other kind of failure. The creator's first presence row
+// is inserted in the SAME transaction as the room, per attempt, so a room
+// row can never commit without a live presence row already sitting under
+// it -- there is no window between "room exists" and "someone is present in
+// it" for a concurrent request to observe.
+export function createRoom(presenceId, ownerId, now = Date.now()) {
   for (let attempt = 0; attempt < 10; attempt++) {
     const code = randomRoomCode();
+    db.exec("BEGIN");
     try {
-      insertRoomStmt.run(code, Date.now());
+      insertRoomStmt.run(code, now);
+      upsertPresenceStmt.run(code, presenceId, ownerId, now);
+      db.exec("COMMIT");
       return code;
     } catch (err) {
+      db.exec("ROLLBACK");
       if (!/UNIQUE|PRIMARY KEY/i.test(String(err?.message ?? ""))) throw err;
     }
   }
   throw new Error(`could not generate a unique room code after ${10} attempts`);
 }
 
-export function roomExists(code) {
-  return roomExistsStmt.get(code) !== undefined;
+// Renews one tab's lease. Validates the room first (same not-found semantics
+// as an unknown room if it has expired), then upserts (room_id, presence_id,
+// owner_id, last_seen), then reconciles -- so a heartbeat that reoccupies a
+// room whose last lease had gone stale (empty_since was set) clears
+// empty_since as a direct consequence of reconcileRoom seeing a live row
+// again, rather than needing separate reoccupation logic here. Returns null
+// if the room does not exist/has expired, so the route can 404 identically
+// to every other room-gated endpoint.
+export function recordHeartbeat(roomId, presenceId, ownerId, now = Date.now()) {
+  const room = getActiveRoom(roomId, now);
+  if (!room) return null;
+  upsertPresenceStmt.run(roomId, presenceId, ownerId, now);
+  return reconcileRoom(roomId, now);
+}
+
+// Proactively removes exactly one tab's lease -- never any other presence
+// row, even another tab sharing the same ownerId. If another live lease
+// remains, the room stays occupied and empty_since (if somehow set) is
+// cleared. If this was the last live lease, this is stronger evidence than
+// waiting for the lease to go stale, so empty_since is set to `now` itself
+// -- but only if it is not already set, so an explicit leave can never move
+// an already-established empty_since. Either way, now that no live presence
+// remains, the remaining (by definition stale) rows are cleaned up. Returns
+// null if the room does not exist/has expired, else the room's current row.
+export function leavePresence(roomId, presenceId, now = Date.now()) {
+  const room = getActiveRoom(roomId, now);
+  if (!room) return null;
+
+  db.exec("BEGIN");
+  try {
+    deleteOnePresenceStmt.run(roomId, presenceId);
+    const staleThreshold = now - STALE_TIMEOUT_MS;
+    const isLive = livePresenceExistsStmt.get(roomId, staleThreshold) !== undefined;
+    if (isLive) {
+      clearEmptySinceStmt.run(roomId);
+    } else {
+      const current = selectRoomStmt.get(roomId);
+      if (current.empty_since === null) {
+        setEmptySinceStmt.run(now, roomId);
+      }
+      deleteAllPresenceForRoomStmt.run(roomId);
+    }
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+  return selectRoomStmt.get(roomId);
+}
+
+// Test/introspection helper: how many presence rows a room currently has,
+// with no reconciliation side effect -- used to assert stale rows were
+// actually physically removed (or weren't, before evidence was captured).
+export function presenceCount(roomId) {
+  return db.prepare("SELECT COUNT(*) AS n FROM presence WHERE room_id = ?").get(roomId).n;
 }

@@ -143,6 +143,22 @@
     </div>
 
     <div id="tool-cursor" aria-hidden="true"></div>
+
+    <div id="leave-room-overlay" hidden>
+      <div id="leave-room-dialog" role="alertdialog" aria-labelledby="leave-room-title" aria-describedby="leave-room-message">
+        <div id="leave-room-header">
+          <span id="leave-room-title">Leave private room?</span>
+        </div>
+        <div id="leave-room-body">
+          <p id="leave-room-message"></p>
+          <div id="leave-room-actions">
+            <button type="button" id="leave-room-cancel" class="app-button">Cancel</button>
+            <button type="button" id="leave-room-confirm" class="app-button">Leave</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script src="/app.js" type="module"></script>
   </body>
 </html>

@@ -1059,13 +1059,108 @@ window.addEventListener("resize", () => {
   updateCursorSize();
 });
 
+// --- Private Room presence -------------------------------------------------
+// presenceId identifies this one tab/page-load, never this browser or this
+// owner: crypto.randomUUID(), held only in module state, never written to
+// localStorage or a cookie, so two tabs in the same room (even the same
+// browser, same anon_id) always carry distinct presence. Heartbeats renew
+// it every HEARTBEAT_INTERVAL_MS; nothing about drawing or erasing ever
+// renews it -- presence is a lease on "this tab is still open", not a proxy
+// for "this owner is still active".
+const HEARTBEAT_INTERVAL_MS = 30_000;
+let presenceId = null;
+let heartbeatHandle = null;
+
+const leaveRoomOverlay = document.getElementById("leave-room-overlay");
+const leaveRoomMessage = document.getElementById("leave-room-message");
+const leaveRoomCancelButton = document.getElementById("leave-room-cancel");
+const leaveRoomConfirmButton = document.getElementById("leave-room-confirm");
+const backToPublicLink = document.getElementById("back-to-public");
+
+function openLeaveRoomDialog() {
+  leaveRoomMessage.textContent =
+    `Save room code ${roomCode} if you want to return.\n` +
+    "Once everyone leaves, the room will be kept for 24 hours before it expires.";
+  leaveRoomOverlay.hidden = false;
+}
+
+function closeLeaveRoomDialog() {
+  leaveRoomOverlay.hidden = true;
+}
+
+async function sendHeartbeat() {
+  try {
+    const res = await fetch(`/api/rooms/${roomCode}/presence`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ presenceId }),
+    });
+    return res.ok;
+  } catch {
+    return false; // best-effort -- a missed heartbeat just lets the lease go stale sooner
+  }
+}
+
+// The 30s interval only ever starts after a first heartbeat actually
+// succeeds, so a room that's already expired (or any other failure) never
+// ends up silently polling an endpoint that can only keep 404ing.
+async function startPresence() {
+  const ok = await sendHeartbeat();
+  if (ok && heartbeatHandle === null) {
+    heartbeatHandle = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+  }
+}
+
+function stopPresence() {
+  if (heartbeatHandle !== null) {
+    clearInterval(heartbeatHandle);
+    heartbeatHandle = null;
+  }
+}
+
+// Proactively drops this one presence row before navigating away, so the
+// room's occupancy (and empty_since, if this was the last live lease)
+// reflects the Leave immediately rather than only after the lease goes
+// stale. Best-effort: the heartbeat simply stopping is still the
+// correctness fallback if this request never lands (closed tab, crash, lost
+// network -- none of which can run this at all).
+async function leaveRoom() {
+  stopPresence();
+  try {
+    await fetch(`/api/rooms/${roomCode}/leave`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ presenceId }),
+    });
+  } catch {
+    // Best-effort, see above.
+  }
+  location.href = "/";
+}
+
 // Visibility only -- which controls are shown, not which drawing engine
 // runs. Both branches share the exact same canvas/app.js below this point.
 if (isPublicCanvas) {
   createRoomButton.addEventListener("click", async () => {
-    const res = await fetch("/api/rooms", { method: "POST" });
+    // Generated client-side, synchronously, before the create-room POST, so
+    // the room row and the creator's first presence row can be inserted in
+    // the very same transaction (server/db.js's createRoom) -- there is no
+    // window where the room exists but nobody is present in it.
+    const newPresenceId = crypto.randomUUID();
+    const res = await fetch("/api/rooms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ presenceId: newPresenceId }),
+    });
     const { code } = await res.json();
-    location.href = `/room/${code}`;
+    // Carries this exact presenceId across the full-page navigation to
+    // /room/CODE via a query param -- not localStorage/sessionStorage, and
+    // not a fresh id minted after arrival, which would otherwise leave the
+    // creation lease's id orphaned (live for up to STALE_TIMEOUT_MS with no
+    // tab ever heartbeating it again). The room page reads and immediately
+    // scrubs it (see the pid handling below), so it never persists in the
+    // visible URL, bookmarks, or history.
+    location.href = `/room/${code}?pid=${encodeURIComponent(newPresenceId)}`;
   });
   joinRoomForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1076,6 +1171,30 @@ if (isPublicCanvas) {
   publicRoomControls.hidden = true;
   privateRoomControls.hidden = false;
   roomCodeLabel.textContent = `Room: ${roomCode}`;
+
+  // Reuses the creation request's own presenceId when this load is the
+  // post-creation redirect (see above); otherwise (direct join by typed
+  // code, or a reload after the pid has already been scrubbed) mints a
+  // fresh one. Either way the param is stripped from the visible URL right
+  // away so it can never be bookmarked, shared, or left in browser history.
+  const pidFromUrl = new URLSearchParams(location.search).get("pid");
+  presenceId = pidFromUrl && pidFromUrl.length > 0 ? pidFromUrl : crypto.randomUUID();
+  if (pidFromUrl) history.replaceState(null, "", location.pathname);
+
+  backToPublicLink.addEventListener("click", (event) => {
+    event.preventDefault(); // never navigate directly -- confirm first
+    openLeaveRoomDialog();
+  });
+  leaveRoomCancelButton.addEventListener("click", closeLeaveRoomDialog);
+  leaveRoomConfirmButton.addEventListener("click", () => {
+    closeLeaveRoomDialog();
+    leaveRoom();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (!leaveRoomOverlay.hidden && event.key === "Escape") closeLeaveRoomDialog();
+  });
+
+  startPresence();
 }
 
 undoButton.addEventListener("click", performUndo);

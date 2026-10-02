@@ -594,6 +594,61 @@ body {
   font-family: inherit;
 }
 
+/* --- Leave-room confirmation dialog ------------------------------------------
+   The only new surface this feature adds to the locked UI. A full-viewport
+   scrim (so an explicit Leave/Cancel choice is required, not an outside
+   click) behind a popover-styled card -- same tokens as #colour-popover,
+   same chrome, nothing new invented. */
+#leave-room-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+#leave-room-overlay[hidden] {
+  display: none;
+}
+
+#leave-room-dialog {
+  width: min(320px, calc(100vw - 32px));
+  background: var(--popover-bg);
+  border: 1px solid var(--popover-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--popover-shadow);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+#leave-room-header {
+  font-weight: 600;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--divider);
+}
+
+#leave-room-body {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+#leave-room-message {
+  margin: 0;
+  white-space: pre-line;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+#leave-room-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* --- Responsive foundation ---------------------------------------------------
    At narrow viewports the ribbon already wraps on its own (flex-wrap above);
    this block only shrinks the few controls that would otherwise overflow a
