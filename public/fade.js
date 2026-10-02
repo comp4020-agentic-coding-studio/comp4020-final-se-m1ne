@@ -9,3 +9,11 @@ export const FADE_DURATION_MS = 750 * 60 * 1000;
 export function fadeOpacity(createdAt, now) {
   return Math.max(0, 1 - (now - createdAt) / FADE_DURATION_MS);
 }
+
+// The one gate between Public Canvas fading and Private Room permanence: a
+// Private Room op's opacity is always 1, regardless of age -- it never calls
+// fadeOpacity at all, so a Private op's createdAt (still persisted, just
+// unused for rendering here) can never cause it to dim or disappear.
+export function effectiveOpacity(op, now, isPublicCanvas) {
+  return isPublicCanvas ? fadeOpacity(op.createdAt, now) : 1;
+}

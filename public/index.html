@@ -7,6 +7,19 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <div id="room-bar">
+      <div id="public-room-controls">
+        <button id="create-room-button" type="button">Create private room</button>
+        <form id="join-room-form">
+          <input id="join-room-code" type="text" maxlength="6" placeholder="Room code" aria-label="Room code" />
+          <button type="submit">Join</button>
+        </form>
+      </div>
+      <div id="private-room-controls" hidden>
+        <span id="room-code-label"></span>
+        <a href="/" id="back-to-public">Back to Public Canvas</a>
+      </div>
+    </div>
     <div id="toolbar">
       <div id="tool-mode">
         <button id="tool-brush" class="tool-button selected" aria-pressed="true">Brush</button>

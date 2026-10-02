@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { FADE_DURATION_MS, fadeOpacity } from "../public/fade.js";
+import { effectiveOpacity, FADE_DURATION_MS, fadeOpacity } from "../public/fade.js";
 
 const MINUTE = 60 * 1000;
 const NOW = 1_000_000_000; // arbitrary fixed instant; fadeOpacity only ever depends on (now - createdAt)
@@ -30,4 +30,23 @@ it("a draw op's opacity stays 0 (never negative) for ages older than 750 minutes
 
 it("FADE_DURATION_MS is exactly 750 minutes in milliseconds", () => {
   expect(FADE_DURATION_MS).toBe(750 * MINUTE);
+});
+
+// The one gate between Public fading and Private permanence: isPublicCanvas
+// is the only thing effectiveOpacity branches on. An op created far older
+// than FADE_DURATION_MS -- old enough that fadeOpacity itself would already
+// be clamped to 0 -- must still render at full opacity on a Private Room
+// page, proving Private bypasses the fade calculation entirely rather than
+// merely producing a very slow fade.
+it("effectiveOpacity stays exactly 1 for a Private op regardless of age, even far past FADE_DURATION_MS", () => {
+  const ancientCreatedAt = NOW - 10_000 * MINUTE;
+  const op = { createdAt: ancientCreatedAt };
+  expect(fadeOpacity(ancientCreatedAt, NOW)).toBe(0); // sanity: this age would be fully faded on Public
+  expect(effectiveOpacity(op, NOW, false)).toBe(1);
+});
+
+it("effectiveOpacity on the Public Canvas matches fadeOpacity exactly", () => {
+  const createdAt = NOW - 375 * MINUTE;
+  const op = { createdAt };
+  expect(effectiveOpacity(op, NOW, true)).toBe(fadeOpacity(createdAt, NOW));
 });

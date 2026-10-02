@@ -1,4 +1,4 @@
-import { fadeOpacity } from "./fade.js";
+import { effectiveOpacity } from "./fade.js";
 
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
@@ -10,6 +10,24 @@ const eraserSizeSlider = document.getElementById("eraser-size-slider");
 const eraserSizeValue = document.getElementById("eraser-size-value");
 const toolBrushButton = document.getElementById("tool-brush");
 const toolEraserButton = document.getElementById("tool-eraser");
+const createRoomButton = document.getElementById("create-room-button");
+const joinRoomForm = document.getElementById("join-room-form");
+const joinRoomCodeInput = document.getElementById("join-room-code");
+const publicRoomControls = document.getElementById("public-room-controls");
+const privateRoomControls = document.getElementById("private-room-controls");
+const roomCodeLabel = document.getElementById("room-code-label");
+
+// The one place "which canvas is this" is decided: a room page is served at
+// /room/CODE (server/index.js's GET /room/:code, which 404s before ever
+// reaching this script unless the room genuinely exists), so the code in the
+// URL is already validated by the time this runs. Everything else below --
+// which endpoints to call, and whether fading applies -- is derived once
+// from this, not re-decided anywhere else.
+const roomCode = location.pathname.match(/^\/room\/([^/]+)/)?.[1]?.toUpperCase() ?? null;
+const isPublicCanvas = roomCode === null;
+const opsUrl = roomCode ? `/api/rooms/${roomCode}/ops` : "/api/ops";
+const drawUrl = roomCode ? `/api/rooms/${roomCode}/ops/draw` : "/api/ops/draw";
+const eraseUrl = roomCode ? `/api/rooms/${roomCode}/ops/erase` : "/api/ops/erase";
 
 // Each owner gets its own off-screen raster layer: a private <canvas> that
 // only that owner's ops are ever replayed onto. Draw ops paint with
@@ -211,8 +229,10 @@ function repaintVisibleCanvas(region) {
     // fully-invisible stroke exactly as if it were new, and nothing erased
     // can ever reappear by aging back into visibility. A fully-faded op is
     // skipped outright here -- still persisted (see public/fade.js), just no
-    // longer painted.
-    const opacity = fadeOpacity(op.createdAt, now);
+    // longer painted. effectiveOpacity is 1 unconditionally on a Private
+    // Room page (isPublicCanvas is false there), so room content never
+    // fades regardless of its createdAt.
+    const opacity = effectiveOpacity(op, now, isPublicCanvas);
     if (opacity <= 0) continue;
     if (clipRect && !rectsIntersect(opPixelBounds(op), clipRect)) continue; // this op can't paint inside the dirty region at all
     const ownerLayer = layers.get(op.ownerId);
@@ -235,7 +255,7 @@ function repaintVisibleCanvas(region) {
 }
 
 async function loadOps() {
-  const res = await fetch("/api/ops");
+  const res = await fetch(opsUrl);
   allOps = await res.json(); // already server-seq-ordered; this exact array (not owner grouping) drives stacking order
   opsByOwner = new Map();
   layers = new Map();
@@ -352,7 +372,7 @@ function appendToGesture(points) {
 }
 
 async function persistGesture(finished) {
-  const endpoint = finished.kind === "erase" ? "/api/ops/erase" : "/api/ops/draw";
+  const endpoint = finished.kind === "erase" ? eraseUrl : drawUrl;
   const body =
     finished.kind === "erase"
       ? { radius: finished.size / 2, points: finished.points }
@@ -507,6 +527,26 @@ window.addEventListener("resize", () => {
   resizeCanvas();
   updateCursorSize();
 });
+
+// Visibility only -- which controls are shown, not which drawing engine
+// runs. Both branches share the exact same canvas/app.js below this point.
+if (isPublicCanvas) {
+  createRoomButton.addEventListener("click", async () => {
+    const res = await fetch("/api/rooms", { method: "POST" });
+    const { code } = await res.json();
+    location.href = `/room/${code}`;
+  });
+  joinRoomForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const code = joinRoomCodeInput.value.trim().toUpperCase();
+    if (code) location.href = `/room/${code}`;
+  });
+} else {
+  publicRoomControls.hidden = true;
+  privateRoomControls.hidden = false;
+  roomCodeLabel.textContent = `Room: ${roomCode}`;
+}
+
 resizeCanvas();
 setMode(mode);
 loadMe().then(loadOps); // ownership must be known before a layer can be attributed to "my own"

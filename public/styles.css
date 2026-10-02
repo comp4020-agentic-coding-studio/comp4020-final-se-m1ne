@@ -19,6 +19,69 @@ body {
   background: #ffffff;
 }
 
+#room-bar {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  /* Must out-rank #toolbar (also z-index 10, later in paint order): the
+     toolbar's natural width exceeds the gap to #room-bar on windows under
+     ~1300px wide, and without this it silently intercepts clicks meant for
+     #create-room-button. */
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  font-size: 0.85rem;
+  color: #1d1d1d;
+}
+
+#public-room-controls,
+#private-room-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The rule above's ID selector otherwise outranks the UA [hidden] rule, so
+   app.js setting .hidden on one of these groups had no visible effect. */
+#public-room-controls[hidden],
+#private-room-controls[hidden] {
+  display: none;
+}
+
+#create-room-button,
+#join-room-form button {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 999px;
+  background: #1d1d1d;
+  color: #fff;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+#join-room-code {
+  width: 6em;
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+}
+
+#room-code-label {
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+#back-to-public {
+  color: #1d1d1d;
+}
+
 #toolbar {
   position: fixed;
   top: 12px;
