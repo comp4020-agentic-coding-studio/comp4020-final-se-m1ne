@@ -1,26 +1,28 @@
 # Public Canvas
 
-Public Canvas is the first part of a collaborative drawing website. Its homepage is itself a shared drawing space: a visitor can arrive and start drawing without creating an account, choosing a room, or setting up a profile. Drawings persist across refreshes and later visits. Real-time synchronisation between open browsers is planned next, but is not part of this version.
+Public Canvas is a collaborative drawing website built around two ways of sharing a canvas. The homepage is a public drawing space that anyone can enter and draw on immediately without an account. Visitors can also create or join a private room using a short room code. Both modes use persistent drawing operations, while the public canvas gradually fades old contributions and private rooms preserve their artwork while the room remains active.
 
 ## What good means
 
-For the public canvas, good means **easy to join, expressive enough to draw with, and shared without giving one participant destructive control over another participant's contribution**.
+For this project, good means **easy to enter, responsive enough to feel like a drawing application, and collaborative without giving one anonymous participant destructive control over another participant's work**.
 
-The first part is about reducing the distance between arriving and participating. Cheng and Hill's study of newcomer participation in Scratch describes several forms of legitimate peripheral participation rather than treating community membership as a single path. I take this as support for letting a newcomer begin with a small contribution before requiring a stronger identity or commitment. Here, opening the homepage is enough to begin drawing; anonymous identity is handled by the application in the background.
+Low-friction participation shaped the public canvas. Cheng and Hill describe multiple pathways through which newcomers can participate in Scratch rather than a single route into community membership. Public Canvas applies that idea by making participation possible before identity or commitment: opening the homepage is enough to draw. Private rooms add a more intentional shared space without introducing accounts or profiles.
 
-The shared canvas also needs to make other people's activity meaningful. Erickson and Kellogg describe socially translucent systems through visibility, awareness, and accountability: people can structure their behaviour when the activity of others is perceptible. A drawing canvas makes this unusually literal. Existing marks are the evidence that other people have been here, and new drawings can respond to, overlap, or work around them. I do not interpret social translucence as requiring unrestricted control. Participants can draw over earlier marks, but the eraser affects only their own work. This keeps visual interaction possible without turning erasing into a way to directly delete another person's contribution.
+The second concern is how people encounter each other through the artwork. Erickson and Kellogg describe socially translucent systems in terms of visibility, awareness, and accountability. Here, previous marks make other participants visible through what they have contributed. People can draw beside, across, or in response to existing work, but the application distinguishes anonymous owners and only allows the eraser to remove the current participant's own pixels. Collaboration therefore changes the shared visual space without making deletion of somebody else's contribution a basic drawing action.
 
-FlockMod is a practical precedent for low-friction collaborative drawing: it runs in a browser, does not require an account to draw, and organises collaboration around shared rooms. This project will also have private rooms, with richer drawing controls and persistent work. The additional interaction I am exploring is a public mode before that room model: the homepage itself is a common canvas, so encountering other people's work does not first require creating or joining a private space.
+FlockMod provides a practical precedent for browser-based collaborative drawing with low barriers to participation and shared rooms. Public Canvas combines that general model with a common homepage canvas and temporary public history. Public drawing operations continuously fade according to their original creation time, while private-room artwork does not fade.
+
+Drawing quality is also part of the definition of good. The application now uses a fixed 1920×1080 artwork document inside a separate workspace, with zoom, Fit, panning, size-aware tool cursors, colour controls, an eyedropper, and spatial erasing. The document is independent of browser size, so resizing or reopening a room does not redefine the artwork coordinate system. Undo and redo operate on each anonymous participant's own operation history.
 
 ## Enforced and judged
 
-Some parts of this definition are mechanically enforced. Draw and erase operations are persisted in SQLite and replayed in deterministic server order. Anonymous ownership is assigned by the server, and erase operations affect only the owner's drawing layer. Automated checks cover persisted operation data, ordering, ownership isolation, and stable history across refreshes.
+Persistence, deterministic operation order, anonymous ownership, owner-only erasing, undo/redo history, public fading, private-room isolation and lifecycle behaviour are covered by automated checks. The drawing document and coordinate calculations are also tested independently of viewport size.
 
-Other qualities require judgement rather than a passing test. I judge whether the brush and eraser respond closely enough to the pointer to feel like drawing tools rather than demo controls, whether their size controls provide enough useful variation, and whether entering the canvas actually feels immediate. These are interaction qualities I test by drawing with the application, not claims I infer from unit tests.
+Other qualities remain matters of judgement. I manually test whether drawing follows the pointer closely, whether zoom and panning still feel accurate, whether the interface reads as a drawing workspace rather than a canvas demo, and whether the boundary between shared interaction and destructive control feels understandable.
 
-## What I am not building yet
+## Current boundary
 
-This version deliberately does not include accounts, profiles, chat, likes, pressure sensitivity, private rooms, or a full professional-editor toolset. Real-time synchronisation is the next multi-user step. The public canvas is also intended eventually to become temporary, with old work fading and expiring, but its lifetime and fading behaviour are not yet decided or implemented.
+Real-time synchronisation between simultaneously open browsers is not implemented yet. The current version also deliberately excludes accounts, profiles, chat, pressure sensitivity, layers, selection tools, shapes and a larger professional brush library. The next drawing-system work is a brush engine, followed by user layers; real-time synchronisation follows once that document model is stable.
 
 ## References
 
