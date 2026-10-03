@@ -10,9 +10,22 @@ import {
   rgbToHsv,
 } from "./colour.js";
 import { compositeOverWhite } from "./sampling.js";
+import {
+  DOCUMENT_WIDTH,
+  DOCUMENT_HEIGHT,
+  ZOOM_LEVELS,
+  clampZoom,
+  cssPointToNormalized,
+  documentPointToPixel,
+  brushSizeToDocumentPx,
+  cursorDiameterCssPx,
+  fitZoom,
+  stepZoom,
+} from "./viewport.js";
 
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+const canvasViewport = document.getElementById("canvas-viewport");
 const toolCursor = document.getElementById("tool-cursor");
 const toolSizeSlider = document.getElementById("tool-size-slider");
 const toolSizeValue = document.getElementById("tool-size-value");
@@ -29,6 +42,11 @@ const roomCodeLabel = document.getElementById("room-code-label");
 const undoButton = document.getElementById("undo-button");
 const redoButton = document.getElementById("redo-button");
 const themeToggle = document.getElementById("theme-toggle");
+const statusDocSize = document.getElementById("status-doc-size");
+const zoomOutButton = document.getElementById("zoom-out-button");
+const zoomInButton = document.getElementById("zoom-in-button");
+const zoomPercentDisplay = document.getElementById("zoom-percent");
+const fitButton = document.getElementById("fit-button");
 
 // Theme is a local UI preference only -- never sent to the server, never
 // part of collaborative state (see server/db.js, untouched by this). The
@@ -187,28 +205,26 @@ let pendingOps = []; // finished[] -- same shape as `current`, minus points stil
 // active ops, so its length is always correct without any extra bookkeeping.
 let myRedoCount = 0;
 
-function resizeCanvas() {
-  canvas.width = canvas.clientWidth;
-  canvas.height = canvas.clientHeight;
-  // Resizing a canvas clears its bitmap (browser behaviour, not a choice
-  // made here), including every per-owner layer -- so a resize must replay
-  // each owner's full op history from scratch at the new pixel size.
-  rebuildAllLayers();
+// The artwork backing store is fixed at the document's own resolution,
+// forever: set once here and never touched again by a window/workspace
+// resize, zoom change, or Fit (see the resize listener and applyZoom below,
+// neither of which assigns canvas.width/height). Zoom instead changes only
+// canvas.style.width/height -- a CSS display-size change the backing store
+// and every already-rendered layer are completely unaffected by.
+function initCanvasBackingStore() {
+  canvas.width = DOCUMENT_WIDTH;
+  canvas.height = DOCUMENT_HEIGHT;
 }
 
-// Points are stored normalized to the canvas's own width/height at draw
-// time, so redrawing at a different size (resize, or a different device)
-// reproduces the same proportions rather than the same raw pixels.
+// Points are stored normalized [0,1], relative to the document, not to
+// whatever CSS size the canvas happens to be displayed at -- so the same
+// persisted point reproduces the same document position at any zoom level.
 function toNormalized(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  return {
-    x: (clientX - rect.left) / rect.width,
-    y: (clientY - rect.top) / rect.height,
-  };
+  return cssPointToNormalized(clientX, clientY, canvas.getBoundingClientRect());
 }
 
 function toPixels(point) {
-  return { x: point.x * canvas.width, y: point.y * canvas.height };
+  return documentPointToPixel(point, DOCUMENT_WIDTH, DOCUMENT_HEIGHT);
 }
 
 function ensureLayer(ownerId) {
@@ -247,7 +263,7 @@ function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points) {
   layerCtx.save();
   layerCtx.globalCompositeOperation = kind === "erase" ? "destination-out" : "source-over";
   layerCtx.strokeStyle = kind === "erase" ? "#000" : color;
-  layerCtx.lineWidth = sizeNormalized * canvas.width;
+  layerCtx.lineWidth = brushSizeToDocumentPx(sizeNormalized, DOCUMENT_WIDTH);
   layerCtx.lineCap = "round";
   layerCtx.lineJoin = "round";
 
@@ -481,7 +497,7 @@ function deltaRegionPixels(points, sizeNormalized) {
     if (p.y < minY) minY = p.y;
     if (p.y > maxY) maxY = p.y;
   }
-  const padPx = (sizeNormalized * canvas.width) / 2 + 2;
+  const padPx = brushSizeToDocumentPx(sizeNormalized, DOCUMENT_WIDTH) / 2 + 2;
   const x0 = minX * canvas.width - padPx;
   const y0 = minY * canvas.height - padPx;
   const x1 = maxX * canvas.width + padPx;
@@ -659,7 +675,33 @@ function sampleColourAt(point) {
   setMode("brush");
 }
 
+// Middle-mouse drag pan: pure workspace-viewport scroll state, isolated from
+// every drawing tool. Checked first, before the Eyedropper branch, before
+// setPointerCapture-for-drawing, and before beginGesture -- so a middle-click
+// can never be interpreted as a draw/erase gesture, never creates an op or an
+// Undo/Redo entry, never sends a persistence request, and never touches
+// colour/tool state. Baseline pan (wheel/trackpad/scrollbar) needs no code at
+// all: it's native #canvas-viewport overflow:auto, including its scroll-range
+// clamping -- see styles.css.
+let panState = null; // { pointerId, startClientX, startClientY, startScrollLeft, startScrollTop } | null
+
+function beginPan(event) {
+  canvas.setPointerCapture(event.pointerId);
+  panState = {
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startScrollLeft: canvasViewport.scrollLeft,
+    startScrollTop: canvasViewport.scrollTop,
+  };
+}
+
 canvas.addEventListener("pointerdown", (event) => {
+  if (event.button === 1) {
+    event.preventDefault(); // suppress the browser's own middle-click autoscroll/paste behaviour
+    beginPan(event);
+    return;
+  }
   if (mode === "eyedropper") {
     // Read-only and one-shot: no pointer capture, no gesture, so this can
     // never create a DRAW/ERASE op, an Undo/Redo entry, or a persistence
@@ -672,12 +714,27 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 
 canvas.addEventListener("pointermove", (event) => {
+  if (panState && event.pointerId === panState.pointerId) {
+    // Native overflow:auto clamps scrollLeft/scrollTop to the valid range on
+    // assignment, so no explicit clamping is needed here (see Correction 1:
+    // no clampScrollOffset helper).
+    canvasViewport.scrollLeft = panState.startScrollLeft - (event.clientX - panState.startClientX);
+    canvasViewport.scrollTop = panState.startScrollTop - (event.clientY - panState.startClientY);
+    return;
+  }
   if (!current) return;
   appendToGesture(coalescedPositions(event));
 });
 
-canvas.addEventListener("pointerup", endGesture);
-canvas.addEventListener("pointercancel", endGesture);
+function endPointerAction(event) {
+  if (panState && event.pointerId === panState.pointerId) {
+    panState = null;
+    return;
+  }
+  endGesture();
+}
+canvas.addEventListener("pointerup", endPointerAction);
+canvas.addEventListener("pointercancel", endPointerAction);
 
 function selectSwatch(swatch) {
   document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("selected"));
@@ -1076,24 +1133,51 @@ toolEyedropperButton.addEventListener("click", () => setMode("eyedropper"));
 // A circular outline tracking the pointer, sized to the tool's actual
 // on-canvas diameter -- not a decorative icon, and never drawn into the
 // canvas's own 2D context, so it can never end up in persisted artwork.
-// brushSizePx/eraserSizePx are already defined in canvas CSS-pixel terms
+// brushSizePx/eraserSizePx are already defined in document-pixel terms
 // (that's the slider's native unit; normalization only happens when a
-// gesture's size is stored), and the canvas's backing-store size tracks its
-// CSS size 1:1 (resizeCanvas sets canvas.width = canvas.clientWidth), so no
-// conversion is needed and a resize can't desync the two. Both tools now
-// stroke with lineWidth = size * canvas.width, so this on-screen circle is
-// exactly the footprint that will actually be painted -- not an
-// approximation of it.
+// gesture's size is stored), but the cursor overlay is CSS-pixel chrome drawn
+// over the (possibly zoomed) workspace -- so its diameter must additionally
+// be scaled by the current zoom to visually match the footprint that will
+// actually be painted (both tools stroke with lineWidth = size * document
+// width). See cursorDiameterCssPx in viewport.js.
 function currentToolDiameterPx() {
   return toolSizes[mode].get();
 }
 
 function updateCursorSize() {
   if (mode === "eyedropper") return; // no diameter to preview -- see setMode's native crosshair instead
-  const diameter = currentToolDiameterPx();
+  const diameter = cursorDiameterCssPx(currentToolDiameterPx(), zoom);
   toolCursor.style.width = `${diameter}px`;
   toolCursor.style.height = `${diameter}px`;
 }
+
+// --- Zoom / Fit -------------------------------------------------------------
+// Zoom changes only the canvas's CSS display box (style.width/height), never
+// canvas.width/height -- so it never clears, resizes, or replays a single
+// pixel of artwork, and native #canvas-viewport overflow:auto automatically
+// recomputes the scrollable range from the new display size with no explicit
+// scroll-clamping code of our own.
+const FIT_MARGIN_PX = 24;
+let zoom = 1;
+
+function applyZoom(nextZoom) {
+  zoom = clampZoom(nextZoom);
+  canvas.style.width = `${DOCUMENT_WIDTH * zoom}px`;
+  canvas.style.height = `${DOCUMENT_HEIGHT * zoom}px`;
+  zoomPercentDisplay.textContent = `${Math.round(zoom * 100)}%`;
+  updateCursorSize();
+}
+
+// One-shot: computed against whatever the workspace viewport measures right
+// now. Never re-run automatically by a later browser resize -- only by the
+// explicit initial boot-time call below, or a user click on Fit.
+function applyFit() {
+  applyZoom(fitZoom(canvasViewport.clientWidth, canvasViewport.clientHeight, DOCUMENT_WIDTH, DOCUMENT_HEIGHT, FIT_MARGIN_PX));
+}
+
+zoomInButton.addEventListener("click", () => applyZoom(stepZoom(zoom, ZOOM_LEVELS, 1)));
+zoomOutButton.addEventListener("click", () => applyZoom(stepZoom(zoom, ZOOM_LEVELS, -1)));
+fitButton.addEventListener("click", applyFit);
 
 canvas.addEventListener("pointerenter", (event) => {
   if (mode === "eyedropper") return; // crosshair only, no circular overlay
@@ -1112,10 +1196,13 @@ canvas.addEventListener("pointerleave", () => {
   toolCursor.style.display = "none";
 });
 
-window.addEventListener("resize", () => {
-  resizeCanvas();
-  updateCursorSize();
-});
+// Deliberately does nothing to the document: a browser/workspace resize
+// changes layout only (the workspace viewport simply has more or less room,
+// which native overflow:auto handles on its own) -- it never mutates
+// canvas.width/height, never replays artwork, never re-runs Fit, and never
+// changes zoom. Nothing about the cursor overlay's size depends on window
+// size either (only zoom and tool size do, see updateCursorSize), so there is
+// genuinely nothing left for a resize listener to do.
 
 // --- Private Room presence -------------------------------------------------
 // presenceId identifies this one tab/page-load, never this browser or this
@@ -1282,8 +1369,14 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
-resizeCanvas();
+initCanvasBackingStore();
+statusDocSize.textContent = `${DOCUMENT_WIDTH} × ${DOCUMENT_HEIGHT}`;
 setMode(mode);
+// One-shot: runs once the workspace has a valid measured size at initial
+// load (hence the rAF, so #canvas-viewport has completed layout), and never
+// again -- a later window resize must never re-trigger Fit (see the removed
+// resize listener above).
+requestAnimationFrame(applyFit);
 loadMe().then(loadOps).then(updateUndoRedoButtons); // ownership must be known before a layer can be attributed to "my own"
 
 // Exists solely to animate the Public Canvas's fade -- a Private Room's

@@ -380,17 +380,84 @@ body {
   opacity: 0.55;
 }
 
+/* --- Canvas viewport ---------------------------------------------------------
+   The scrollable workspace around the fixed-document canvas. Its own
+   background is themed (--workspace-bg) so the surrounding workspace reads as
+   visually distinct from the white document sitting inside it. `overflow:
+   auto` is the one and only pan/scroll mechanism for a document larger than
+   the viewport -- there is no custom scroll-clamping code anywhere.
+
+   `align-items`/`justify-content` use the `safe` keyword deliberately: a plain
+   `center` on a flex/grid container clips an overflowing child's start-edge
+   content out of the scrollable range entirely (a well-known centering
+   pitfall), which would make part of an oversized, zoomed-in canvas
+   unreachable by scrolling. `safe center` keeps the canvas centred whenever it
+   fits, but falls back to start-alignment (scrollable from (0,0)) the moment
+   it doesn't, so every pixel of an oversized canvas always stays reachable. */
+#canvas-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--workspace-bg);
+  display: flex;
+  align-items: safe center;
+  justify-content: safe center;
+}
+
 /* --- Canvas ----------------------------------------------------------------
    The single largest element on the page. Its background is a literal colour,
    deliberately NOT a token -- theme must never invert or alter canvas
-   artwork, and keeping this rule untokenized is what guarantees that. */
+   artwork, and keeping this rule untokenized is what guarantees that.
+
+   Fixed 1920x1080 backing store (set once in JS, see initCanvasBackingStore);
+   its CSS display size is driven only by zoom (canvas.style.width/height in
+   public/app.js), never by this stylesheet and never by flex-filling its
+   container -- so it no longer stretches to the viewport's width/height. */
 #canvas {
-  flex: 1 1 auto;
-  min-height: 0;
-  width: 100%;
   display: block;
   touch-action: none;
   background: #ffffff;
+  flex-shrink: 0;
+}
+
+/* --- Status bar ---------------------------------------------------------------
+   Compact bottom strip (Paint-inspired): fixed document size on the left,
+   Zoom Out/percentage/Zoom In/Fit on the right. Deliberately understated --
+   same font scale and muted colour as the rest of the chrome, never the most
+   visually dominant element on the page. */
+#status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  padding: 4px 14px;
+  gap: 8px;
+  background: var(--workspace-bg);
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+#status-doc-size {
+  font-variant-numeric: tabular-nums;
+}
+
+#zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#zoom-controls .icon-button {
+  width: 26px;
+  height: 26px;
+}
+
+#zoom-percent {
+  min-width: 3.4em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
 }
 
 #tool-cursor {
@@ -705,5 +772,18 @@ body {
 
   .colour-field {
     grid-template-columns: 14px 1fr 44px;
+  }
+
+  #status-bar {
+    padding: 4px 10px;
+    font-size: 0.72rem;
+  }
+
+  #zoom-controls {
+    gap: 4px;
+  }
+
+  #zoom-percent {
+    min-width: 2.8em;
   }
 }
