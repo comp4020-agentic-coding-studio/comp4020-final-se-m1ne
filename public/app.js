@@ -9,6 +9,7 @@ import {
   rgbToHex,
   rgbToHsv,
 } from "./colour.js";
+import { compositeOverWhite } from "./sampling.js";
 
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
@@ -17,6 +18,7 @@ const toolSizeSlider = document.getElementById("tool-size-slider");
 const toolSizeValue = document.getElementById("tool-size-value");
 const toolBrushButton = document.getElementById("tool-brush");
 const toolEraserButton = document.getElementById("tool-eraser");
+const toolEyedropperButton = document.getElementById("tool-eyedropper");
 const colourGroup = document.getElementById("colour-group");
 const createRoomButton = document.getElementById("create-room-button");
 const joinRoomForm = document.getElementById("join-room-form");
@@ -107,7 +109,7 @@ let brushColor = hexToRgb(color);
 let pickerHue = rgbToHsv(brushColor).h;
 let brushSizePx = 6;
 let eraserSizePx = 30;
-let mode = "brush"; // "brush" | "eraser"
+let mode = "brush"; // "brush" | "eraser" | "eyedropper"
 
 // One shared slider's meaning depends on which tool is active: each entry
 // owns its own range (matching the two permanent sliders' old min/max/step
@@ -134,8 +136,17 @@ const toolSizes = {
 
 // Applies the active tool's own range and current value to the one shared
 // slider -- called on every tool switch so min/max/value/display all update
-// together, never lagging behind which tool is actually selected.
+// together, never lagging behind which tool is actually selected. Eyedropper
+// has no entry in toolSizes (it has no size at all), so the slider is simply
+// disabled rather than make up a value for it -- brushSizePx/eraserSizePx are
+// left exactly as they were, and whichever one was last shown stays visible
+// but inert underneath the disabled control.
 function syncSizeControlToMode() {
+  if (mode === "eyedropper") {
+    toolSizeSlider.disabled = true;
+    return;
+  }
+  toolSizeSlider.disabled = false;
   const cfg = toolSizes[mode];
   toolSizeSlider.min = cfg.min;
   toolSizeSlider.max = cfg.max;
@@ -617,7 +628,45 @@ async function performRedo() {
   updateUndoRedoButtons();
 }
 
+// Clamps a backing-store pixel index into [0, exclusiveMax - 1] -- the valid
+// row/column range for an exclusiveMax-wide/tall bitmap -- so a pointer at
+// the extreme edge of the canvas never requests an out-of-bounds pixel.
+function clampPixelIndex(n, exclusiveMax) {
+  return Math.min(exclusiveMax - 1, Math.max(0, n));
+}
+
+// Eyedropper: reads the exact colour already visible on #canvas at this
+// point. repaintVisibleCanvas has already done all the real work by the time
+// this runs -- seq-ordered overlap, owner-clipped erasing, Public fade, and
+// any still-pending/in-progress local strokes are all already baked into
+// this one bitmap -- so this never replays ops, looks at owner layers, or
+// reconstructs fade; it just reads one pixel from the same context every
+// other repaint already draws into.
+//
+// The one thing that pixel read can't see on its own: #canvas's own bitmap
+// is transparent (alpha 0) wherever nothing has been drawn, since the white
+// the user sees there is a separate, literal, never-themed CSS background
+// (#canvas { background: #ffffff }, styles.css) that getImageData cannot
+// read. compositeOverWhite (sampling.js) recovers the colour actually
+// visible on screen from the raw RGBA, for a fully empty pixel, a fully
+// opaque one, and every anti-aliased/faded alpha in between.
+function sampleColourAt(point) {
+  const pixel = toPixels(point);
+  const x = clampPixelIndex(Math.floor(pixel.x), canvas.width);
+  const y = clampPixelIndex(Math.floor(pixel.y), canvas.height);
+  const [r, g, b, a] = ctx.getImageData(x, y, 1, 1).data;
+  setBrushColorFromRgb(compositeOverWhite(r, g, b, a));
+  setMode("brush");
+}
+
 canvas.addEventListener("pointerdown", (event) => {
+  if (mode === "eyedropper") {
+    // Read-only and one-shot: no pointer capture, no gesture, so this can
+    // never create a DRAW/ERASE op, an Undo/Redo entry, or a persistence
+    // request, and never touches room/presence state.
+    sampleColourAt(pointerPos(event));
+    return;
+  }
   canvas.setPointerCapture(event.pointerId);
   beginGesture(mode === "eraser" ? "erase" : "draw", pointerPos(event));
 });
@@ -1002,9 +1051,15 @@ function setMode(newMode) {
   mode = newMode;
   toolBrushButton.classList.toggle("selected", mode === "brush");
   toolEraserButton.classList.toggle("selected", mode === "eraser");
+  toolEyedropperButton.classList.toggle("selected", mode === "eyedropper");
   toolBrushButton.setAttribute("aria-pressed", String(mode === "brush"));
   toolEraserButton.setAttribute("aria-pressed", String(mode === "eraser"));
-  canvas.style.cursor = "none"; // replaced by the custom circular tool-cursor overlay
+  toolEyedropperButton.setAttribute("aria-pressed", String(mode === "eyedropper"));
+  // Eyedropper has no on-canvas diameter to preview, so it gets a plain
+  // native crosshair instead of the circular size-preview overlay Brush/
+  // Eraser use (replaced by that overlay via updateCursorSize below).
+  canvas.style.cursor = mode === "eyedropper" ? "crosshair" : "none";
+  if (mode === "eyedropper") toolCursor.style.display = "none";
   syncSizeControlToMode();
   updateCursorSize();
   // Colour doesn't apply to the Eraser, but stays editable while it's active
@@ -1016,6 +1071,7 @@ function setMode(newMode) {
 
 toolBrushButton.addEventListener("click", () => setMode("brush"));
 toolEraserButton.addEventListener("click", () => setMode("eraser"));
+toolEyedropperButton.addEventListener("click", () => setMode("eyedropper"));
 
 // A circular outline tracking the pointer, sized to the tool's actual
 // on-canvas diameter -- not a decorative icon, and never drawn into the
@@ -1033,12 +1089,14 @@ function currentToolDiameterPx() {
 }
 
 function updateCursorSize() {
+  if (mode === "eyedropper") return; // no diameter to preview -- see setMode's native crosshair instead
   const diameter = currentToolDiameterPx();
   toolCursor.style.width = `${diameter}px`;
   toolCursor.style.height = `${diameter}px`;
 }
 
 canvas.addEventListener("pointerenter", (event) => {
+  if (mode === "eyedropper") return; // crosshair only, no circular overlay
   updateCursorSize();
   toolCursor.style.left = `${event.clientX}px`;
   toolCursor.style.top = `${event.clientY}px`;

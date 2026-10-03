@@ -162,6 +162,22 @@ body {
   cursor: default;
 }
 
+/* Modifier for icon-only .app-button instances (Undo/Redo): a deliberate
+   square hit area in place of the text button's horizontal padding, while
+   keeping every other .app-button rule above (hover/active/disabled) as-is. */
+.app-button.icon-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-button.icon-button svg {
+  pointer-events: none;
+}
+
 /* The theme toggle is an .app-button plus a small state dot -- no icon
    library, just a CSS-drawn filled/outline circle so the current state reads
    at a glance without relying on the text label alone. */
@@ -272,17 +288,26 @@ body {
   gap: 4px;
 }
 
+/* Icon-only: width/height form a deliberate square hit area (not shrunk to
+   the icon's own size), and the svg icon is pointer-events:none so the click
+   always lands on the button regardless of which child it's aimed at. */
 .tool-button {
-  width: 64px;
-  padding: 6px 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: var(--text-primary);
-  font-size: 0.85rem;
-  font-family: inherit;
   cursor: pointer;
-  text-align: center;
+}
+
+.tool-button svg {
+  pointer-events: none;
 }
 
 .tool-button:hover {
