@@ -224,6 +224,175 @@ function isPixelRoom(room) {
   return room.width !== null;
 }
 
+// --- Realtime (SSE) ----------------------------------------------------------
+// One in-process subscriber set per pixel document -- the Public wall, or one
+// specific pixel-art room -- never a second notion of scope beyond the exact
+// same (roomId) key every pixel route above already validates against. A
+// single Fly machine and one synchronous SQLite connection (server/db.js)
+// make this in-memory fan-out correct and sufficient: there is exactly one
+// Node process that could ever need to know about a write, so no broker
+// (Redis or otherwise) is needed to fan it out to the others. Legacy
+// freehand rooms/ops never get a scope key here at all -- there is no stream
+// route that ever resolves one for them (see the route guards below), so a
+// freehand write can structurally never broadcast into a pixel stream.
+const pixelSubscribers = new Map(); // scopeKey -> Set<ServerResponse>
+
+function pixelScopeKey(roomId) {
+  return roomId === null ? "__public__" : roomId;
+}
+
+function subscribePixelStream(roomId, res) {
+  const key = pixelScopeKey(roomId);
+  let subscribers = pixelSubscribers.get(key);
+  if (!subscribers) {
+    subscribers = new Set();
+    pixelSubscribers.set(key, subscribers);
+  }
+  subscribers.add(res);
+  return function unsubscribe() {
+    subscribers.delete(res);
+    if (subscribers.size === 0) pixelSubscribers.delete(key);
+  };
+}
+
+// Writes one SSE frame to every subscriber currently in this exact scope --
+// Public pixel wall or one specific room, never both, never any other room.
+// Called only after a write has already committed (insertOp/undoLatestOwnOp/
+// redoLatestOwnOp have already returned, synchronously -- see server/db.js),
+// so a rejected/invalid request, which returns before ever reaching this
+// point, can never cause a broadcast. A write failing to reach a particular
+// subscriber (a socket that is already gone but whose 'close' cleanup
+// hasn't run yet) is swallowed here -- best-effort, exactly like every other
+// best-effort network call in this codebase (see public/app.js's own
+// comments on persistGesture/sendHeartbeat) -- and is not this request's
+// problem to report; that subscriber's own cleanup handles it.
+function broadcastPixelEvent(roomId, event, data) {
+  const subscribers = pixelSubscribers.get(pixelScopeKey(roomId));
+  if (!subscribers || subscribers.size === 0) return;
+  const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of subscribers) {
+    try {
+      res.write(frame);
+    } catch {
+      // best-effort; the subscriber's own 'close' handler (startPixelStream
+      // below) is the real cleanup path, not this write.
+    }
+  }
+}
+
+const SSE_HEARTBEAT_INTERVAL_MS = 20_000;
+
+// GET handler shared by the Public and Private pixel stream routes below.
+// Sends a complete authoritative snapshot as the very first frame on this
+// connection, synchronously, in the same tick this subscriber is registered
+// -- before this function returns to the event loop, so no concurrent
+// request's insertOp/undo/redo (all synchronous, see server/db.js) can ever
+// commit and broadcast in the gap between "subscribed" and "received the
+// snapshot": there is no gap for one to land in. Every subsequent reconnect
+// (the browser's native EventSource retry included) is just a brand new call
+// to this same route, so it always gets an equally fresh snapshot -- no
+// Last-Event-ID or missed-event bookkeeping is needed.
+function startPixelStream(req, res, roomId, width, height) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no", // disables any intermediary proxy's response buffering for this stream
+  });
+
+  const unsubscribe = subscribePixelStream(roomId, res);
+  const ops = listOps(roomId, "pixel");
+  res.write(`event: sync\ndata: ${JSON.stringify({ docKind: "pixel", width, height, ops })}\n\n`);
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(": heartbeat\n\n"); // a comment line: keeps the connection alive through idle proxies, not a real event
+    } catch {
+      // connection already gone; req's 'close' below runs the real cleanup
+    }
+  }, SSE_HEARTBEAT_INTERVAL_MS);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
+}
+
+// --- Ephemeral collaborator cursors ------------------------------------------
+// Never persisted in SQLite, never touches the presence table/lease (that
+// stays exactly what it already was: a durable, DB-backed signal of room
+// OCCUPANCY, unrelated to where any one pointer currently is -- see
+// server/db.js's own presence comments). A cursor update is pure in-process
+// pub/sub over the exact same per-scope subscriber sets the op/undo/redo
+// broadcasts above already use, so Public/Private/room isolation holds here
+// for the same structural reason it does there: one scope key, reused, never
+// a second one invented for cursors.
+
+// A small, fast, deterministic string hash -- not cryptographic, not meant to
+// be: it only ever needs to turn the same ownerId into the same hue every
+// time, on this server, with no persisted state and no coordination between
+// owners. Never derived from, or influenced by, anything a client supplies.
+function hashOwnerId(ownerId) {
+  let hash = 0;
+  for (let i = 0; i < ownerId.length; i++) {
+    hash = (hash * 31 + ownerId.charCodeAt(i)) | 0;
+  }
+  return hash >>> 0;
+}
+
+function cursorColorForOwner(ownerId) {
+  const hue = hashOwnerId(ownerId) % 360;
+  return `hsl(${hue}, 70%, 45%)`;
+}
+
+function isValidCursorCoordinate(value, limit) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value < limit;
+}
+
+// Handles one cursor update for one pixel document (Public or a specific
+// pixel-art room) -- never persisted, never trusts anything from the body
+// except the position and the two visibility booleans. ownerId always comes
+// from the same server-derived anon_id cookie every draw/erase route already
+// trusts -- there is no ownerId or nickname field anywhere in this body that
+// could ever be read as one; the nickname shown, if any, is always looked up
+// server-side from this owner's own getGuestNickname record, never accepted
+// from the client. showCursor:false needs no position at all -- it is the
+// explicit "hide my cursor" signal (leaving the canvas, or a user's own
+// privacy toggle), broadcasting cursor-hide and nothing else.
+function handlePixelCursor(req, res, roomId, width, height) {
+  const ownerId = getOrSetAnonId(req, res);
+  const { x, y, showCursor, showNickname } = req.body ?? {};
+
+  if (typeof showCursor !== "boolean") {
+    res.status(400).json({ error: "showCursor must be a boolean" });
+    return;
+  }
+
+  if (!showCursor) {
+    broadcastPixelEvent(roomId, "cursor-hide", { ownerId });
+    res.status(200).json({ ok: true });
+    return;
+  }
+
+  if (typeof showNickname !== "boolean") {
+    res.status(400).json({ error: "showNickname must be a boolean" });
+    return;
+  }
+  if (!isValidCursorCoordinate(x, width) || !isValidCursorCoordinate(y, height)) {
+    res.status(400).json({ error: "x and y must be finite numbers within the document bounds" });
+    return;
+  }
+
+  const cursor = { ownerId, x, y, color: cursorColorForOwner(ownerId) };
+  if (showNickname) {
+    const nickname = getGuestNickname(ownerId);
+    if (nickname) cursor.nickname = nickname; // omitted entirely if this owner has never set one -- never a fabricated name
+  }
+
+  broadcastPixelEvent(roomId, "cursor", cursor);
+  res.status(200).json({ ok: true });
+}
+
 // Persists one pixel-art draw gesture as a single append-only op, under the
 // caller's own server-derived ownerId (never the request body -- there is no
 // ownerId field in the body at all, identical to handleDraw's own contract).
@@ -255,7 +424,17 @@ function handlePixelDraw(req, res, roomId, width, height) {
   };
   const seq = insertOp(op);
   abandonRedoBranch(roomId, op.ownerId, "pixel");
-  res.status(201).json({ ...op, seq });
+  const persisted = { ...op, seq };
+  // Broadcast only after the write has actually committed (insertOp above
+  // already returned) -- a request that failed validation above never
+  // reaches this line at all, so an invalid/rejected draw can never
+  // broadcast. active: true is added for the broadcast only (not the HTTP
+  // response below, whose shape predates this step and is left unchanged):
+  // every op/undo/redo event this server sends carries the same explicit
+  // active flag, so a subscriber never has to guess it from which event name
+  // arrived.
+  broadcastPixelEvent(roomId, "op", { ...persisted, active: true });
+  res.status(201).json(persisted);
 }
 
 // Persists one pixel-art erase gesture, symmetric with handlePixelDraw. Erase
@@ -289,24 +468,41 @@ function handlePixelErase(req, res, roomId, width, height) {
   };
   const seq = insertOp(op);
   abandonRedoBranch(roomId, op.ownerId, "pixel");
-  res.status(201).json({ ...op, seq });
+  const persisted = { ...op, seq };
+  broadcastPixelEvent(roomId, "op", { ...persisted, active: true });
+  res.status(201).json(persisted);
 }
 
 app.get("/api/pixels", (req, res) => {
   res.json(listOps(null, "pixel"));
 });
 
+app.get("/api/pixels/stream", (req, res) => {
+  startPixelStream(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT);
+});
+
 app.post("/api/pixels/draw", (req, res) => handlePixelDraw(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT));
 app.post("/api/pixels/erase", (req, res) => handlePixelErase(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT));
 
+app.post("/api/pixels/cursor", (req, res) =>
+  handlePixelCursor(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT),
+);
+
+// undo/redo broadcast only when there was actually something to undo/redo --
+// a no-op (op === null, nothing left) changes no state and so must never
+// broadcast anything, exactly like an invalid draw/erase never does.
 app.post("/api/pixels/undo", (req, res) => {
   const ownerId = getOrSetAnonId(req, res);
-  res.status(200).json({ op: undoLatestOwnOp(null, ownerId, "pixel") });
+  const op = undoLatestOwnOp(null, ownerId, "pixel");
+  if (op) broadcastPixelEvent(null, "undo", { ...op, active: false });
+  res.status(200).json({ op });
 });
 
 app.post("/api/pixels/redo", (req, res) => {
   const ownerId = getOrSetAnonId(req, res);
-  res.status(200).json({ op: redoLatestOwnOp(null, ownerId, "pixel") });
+  const op = redoLatestOwnOp(null, ownerId, "pixel");
+  if (op) broadcastPixelEvent(null, "redo", { ...op, active: true });
+  res.status(200).json({ op });
 });
 
 // Undo/redo for the Public Canvas. Same contract as the Private room routes
@@ -452,6 +648,34 @@ app.get("/api/rooms/:code/pixels", (req, res) => {
   res.json(listOps(code, "pixel"));
 });
 
+app.get("/api/rooms/:code/pixels/stream", (req, res) => {
+  const code = normalizeRoomCode(req.params.code);
+  const room = getActiveRoom(code);
+  if (!room) {
+    res.status(404).json({ error: "no such room" });
+    return;
+  }
+  if (!isPixelRoom(room)) {
+    res.status(400).json({ error: "this room is a legacy freehand room; it has no pixel stream" });
+    return;
+  }
+  startPixelStream(req, res, code, room.width, room.height);
+});
+
+app.post("/api/rooms/:code/pixels/cursor", (req, res) => {
+  const code = normalizeRoomCode(req.params.code);
+  const room = getActiveRoom(code);
+  if (!room) {
+    res.status(404).json({ error: "no such room" });
+    return;
+  }
+  if (!isPixelRoom(room)) {
+    res.status(400).json({ error: "this room is a legacy freehand room; it has no pixel cursors" });
+    return;
+  }
+  handlePixelCursor(req, res, code, room.width, room.height);
+});
+
 app.post("/api/rooms/:code/pixels/draw", (req, res) => {
   const code = normalizeRoomCode(req.params.code);
   const room = getActiveRoom(code);
@@ -492,7 +716,9 @@ app.post("/api/rooms/:code/pixels/undo", (req, res) => {
     return;
   }
   const ownerId = getOrSetAnonId(req, res);
-  res.status(200).json({ op: undoLatestOwnOp(code, ownerId, "pixel") });
+  const op = undoLatestOwnOp(code, ownerId, "pixel");
+  if (op) broadcastPixelEvent(code, "undo", { ...op, active: false });
+  res.status(200).json({ op });
 });
 
 app.post("/api/rooms/:code/pixels/redo", (req, res) => {
@@ -507,7 +733,9 @@ app.post("/api/rooms/:code/pixels/redo", (req, res) => {
     return;
   }
   const ownerId = getOrSetAnonId(req, res);
-  res.status(200).json({ op: redoLatestOwnOp(code, ownerId, "pixel") });
+  const op = redoLatestOwnOp(code, ownerId, "pixel");
+  if (op) broadcastPixelEvent(code, "redo", { ...op, active: true });
+  res.status(200).json({ op });
 });
 
 // Same contract as the Public /api/ops/undo and /api/ops/redo above, scoped
