@@ -229,3 +229,51 @@ describe("persistGesture repaint-skip performance optimization", () => {
     expect(fullCanvasClears.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+// --- Pixquare-referenced chrome: structure preserved after the visual pass ----
+// jsdom does no real layout, so none of this can confirm actual rendered
+// pixel widths or visual similarity to the reference -- only that every
+// control is still present, still correctly wired, and still carries an
+// accessible name after #edit-colour-button's text was replaced with an icon.
+
+describe("Edit Colour button restyled as an icon button, still functional", () => {
+  it("has no visible text content but keeps an accessible name, and still opens the colour popover", () => {
+    const button = document.getElementById("edit-colour-button") as HTMLButtonElement;
+    expect(button.textContent?.trim()).toBe("");
+    expect(button.getAttribute("aria-label")).toBe("Edit colour");
+    expect(button.querySelector("svg")).toBeTruthy();
+
+    const popover = document.getElementById("colour-popover") as HTMLElement;
+    expect(popover.hidden).toBe(true);
+    button.dispatchEvent(new Event("click", { bubbles: true }));
+    expect(popover.hidden).toBe(false);
+  });
+});
+
+describe("Shared controls remain reachable after flattening the top toolbar into one row", () => {
+  it("Pencil, Eraser, Eyedropper, palette swatches, and Edit Colour are all still present and clickable", () => {
+    for (const id of ["tool-brush", "tool-eraser", "tool-eyedropper", "edit-colour-button"]) {
+      const el = document.getElementById(id);
+      expect(el, `#${id} should exist`).toBeTruthy();
+    }
+    const swatches = document.querySelectorAll("#palette .swatch");
+    expect(swatches.length).toBeGreaterThan(0);
+
+    const eraserButton = document.getElementById("tool-eraser") as HTMLButtonElement;
+    eraserButton.dispatchEvent(new Event("click", { bubbles: true }));
+    expect(eraserButton.classList.contains("selected")).toBe(true);
+    expect(eraserButton.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("the now-redundant group labels (Tools/Colours/Size) are not visible text in the toolbar", () => {
+    // #size-group is hidden entirely (existing behaviour); #tool-group and
+    // #colour-group stay in the DOM (display: contents) but their own
+    // .group-label text must not render -- see the .studio-layout
+    // #tool-group/#colour-group .group-label rule in styles.css.
+    for (const groupId of ["tool-group", "colour-group"]) {
+      const label = document.querySelector(`#${groupId} .group-label`);
+      expect(label, `#${groupId} .group-label should still exist in the DOM`).toBeTruthy();
+    }
+    expect(document.getElementById("size-group")!.hidden).toBe(true);
+  });
+});

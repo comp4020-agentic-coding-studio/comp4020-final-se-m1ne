@@ -44,6 +44,17 @@
      looking unchanged while making the canvas area read as a distinct
      surface even before the eye reaches its 1px outline. */
   --canvas-surround-bg: #e8e9eb;
+  /* A dotted workspace texture, matching the reference's own dark dotted
+     canvas surround -- a subtle dot grid the document visibly sits on top
+     of, rather than a flat tint alone. Purely decorative background-image
+     on #canvas-viewport, never on #canvas itself; completely independent of
+     the pixel-grid overlay (which tracks logical pixel boundaries and only
+     shows above a zoom threshold) and never saved, read, or sent anywhere. */
+  --canvas-dot: rgba(20, 20, 20, 0.12);
+  /* The pixel-grid overlay and the "grid" accent used elsewhere both use
+     this blue, matching the reference's own blue grid lines (rather than a
+     neutral gray) while staying the same restrained hue as --focus-ring. */
+  --grid-line: rgba(30, 136, 229, 0.4);
   /* Pixel-game visual language: small, crisp corners (never fully square --
      a hairline radius still avoids aliased-looking corners on a hi-DPI
      screen -- and never the softer, more "modern web form" 4-6px radius
@@ -83,6 +94,8 @@
      existing dark chrome, so this just keeps the previous --workspace-bg
      value rather than introducing a second dark tone with no real need. */
   --canvas-surround-bg: #1f1f22;
+  --canvas-dot: rgba(255, 255, 255, 0.1);
+  --grid-line: rgba(108, 180, 255, 0.45);
 }
 
 html,
@@ -417,14 +430,16 @@ body {
 }
 
 #tool-size-number {
-  /* Wide enough for 3 digits (up to "100") plus the native spin-button
-     arrows WITHOUT truncating or internally scrolling the typed value --
-     the previous, narrower width was exactly why "100" rendered as if it
-     were "10". The arrows themselves are removed below (not needed: the
-     slider and direct typing already cover stepping), reclaiming space and
-     giving a cleaner, more compact numeric field either way. */
-  width: 3.6em;
-  padding: 3px 4px;
+  /* Wide enough for 3 digits (up to "100") WITHOUT truncating or internally
+     scrolling the typed value -- the native spin-button arrows are removed
+     below (not needed: the slider and direct typing already cover
+     stepping), which is what makes a narrow-enough-for-the-rail width still
+     safe: 2.8em of border-box width minus this padding/border leaves ~28px
+     for text, comfortably more than 3 monospace digits at this font-size
+     need. This box plus the side rail's own padding is what keeps the whole
+     rail at/under its ~52px target (60px hard max). */
+  width: 2.8em;
+  padding: 2px 2px;
   border: 1px solid var(--input-border);
   border-radius: var(--radius-sm);
   background: var(--input-bg);
@@ -504,7 +519,12 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  background: var(--canvas-surround-bg);
+  background-color: var(--canvas-surround-bg);
+  /* A dot every 16 CSS px, independent of zoom/pan/document size (a static
+     repeating background-image on the viewport's own box, not drawn per
+     logical pixel) -- the reference's own dotted workspace texture. */
+  background-image: radial-gradient(circle, var(--canvas-dot) 1px, transparent 1px);
+  background-size: 16px 16px;
   display: flex;
   align-items: safe center;
   justify-content: safe center;
@@ -905,8 +925,8 @@ body {
 #pixel-grid-overlay {
   position: absolute;
   pointer-events: none;
-  background-image: linear-gradient(to right, rgba(128, 128, 128, 0.35) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(128, 128, 128, 0.35) 1px, transparent 1px);
+  background-image: linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
 }
 
 #pixel-grid-overlay[hidden] {
@@ -1013,38 +1033,66 @@ body {
   gap: 8px;
 }
 
-/* --- Pixquare/Procreate-inspired shared editor shell -------------------------
+/* --- Pixquare-referenced shared editor shell ----------------------------------
    Applied unconditionally by public/pixel-editor.js (.studio-layout on
    #workspace) for BOTH the Public pixel wall and every Private pixel-art
    room -- one shared shell, never two separately designed interfaces (never
    applied to a legacy freehand page, which loads public/app.js instead and
-   never touches this file's own pixel-editor.js code at all). Primary tools
-   stay in a compact top toolbar (the existing #tool-ribbon, restyled slimmer
-   here, not replaced); brush size moves to a compact vertical control at the
-   canvas's own left edge (#studio-side-rail), next to a reserved (disabled,
-   non-functional) Opacity slot; the canvas fills whatever's left. No
-   permanent page-height side panels -- the earlier left-rail/right-panel
-   layout this replaces made Tools/Document/Brush/Colour each a full-width
-   row, which is exactly the "broken, not a coherent editor" look this
-   corrects. Every control below is the exact same element (#tool-group,
-   #size-group, #colour-group, #room-code-label, etc.) Public and Private
-   both already use -- relocated by JS, never duplicated. Public/Private
-   differences (room navigation, the Document popover) are layered on top of
-   this identical shell by pixel-editor.js's own Public/Private branch,
-   never by a second shell. */
+   never touches this file's own pixel-editor.js code at all). Modelled on
+   Pixquare's own compact, canvas-focused state (docs.pixquare.art's
+   Interface page, and a supplied reference screenshot -- the expanded
+   Layers/animation/palette/preview panels shown there are NOT reproduced;
+   this project has no layers, frames, or a reference-image feature to put
+   in them): one tight, flat row of small square icon buttons for Tools and
+   Colours (no per-group label, no divider box -- see .studio-layout
+   #tool-ribbon .ribbon-group below), a narrow vertical brush-size control at
+   the canvas's own left edge (#studio-side-rail), and the canvas filling
+   whatever's left. No permanent page-height side panels -- the earlier
+   left-rail/right-panel layout this replaces made Tools/Document/Brush/
+   Colour each a full-width row, which is exactly the "broken, not a
+   coherent editor" look this corrects. Every control below is the exact
+   same element (#tool-group, #size-group, #colour-group, #room-code-label,
+   etc.) Public and Private both already use -- relocated by JS, never
+   duplicated. Public/Private differences (room navigation, the Document
+   popover) are layered on top of this identical shell by pixel-editor.js's
+   own Public/Private branch, never by a second shell. */
 
 .studio-layout #tool-ribbon {
   padding: 4px 10px;
   gap: 2px;
 }
 
-.studio-layout #tool-ribbon .ribbon-group {
-  padding: 2px 10px;
+/* .ribbon-group's own column layout, label, and divider border are a
+   Paint-ribbon look -- not what a single flat row of icon buttons needs.
+   display: contents removes the group's own box AND its child
+   .group-controls wrapper's box entirely in studio mode, so every actual
+   button (#tool-brush, #tool-eraser, #colour-current, #palette,
+   #tool-eyedropper, #edit-colour-button) becomes a direct flex item of
+   #tool-ribbon itself, sharing its one `gap` -- one continuous row, no
+   nested boxes, no divider lines between Tools and Colours, matching the
+   reference's single undifferentiated tool cluster. #palette itself is
+   NOT flattened, so its five swatches still read as one small cluster
+   within the row, the same way a real palette naturally groups. The
+   .group-label text ("Tools"/"Colours") is still rendered (display:
+   contents only removes the WRAPPER's box, not its children) and is
+   explicitly hidden below -- icons alone read clearly in a slim toolbar. */
+/* Scoped to #tool-group/#colour-group specifically, NOT the generic
+   .ribbon-group selector: #size-group relies on a HIGHER-specificity
+   #size-group[hidden] rule (above) to stay display:none even though its
+   own content was relocated away to #studio-side-rail -- matching the
+   generic .ribbon-group selector here (which would win on specificity
+   alone) would replace that explicit, robust display:none with a fragile
+   "happens to have no children left" display:contents instead. */
+.studio-layout #tool-group,
+.studio-layout #colour-group,
+.studio-layout #tool-group .group-controls,
+.studio-layout #colour-group .group-controls {
+  display: contents;
 }
 
 .studio-layout #tool-group .group-label,
 .studio-layout #colour-group .group-label {
-  display: none; /* icons alone read clearly in a slim top toolbar */
+  display: none;
 }
 
 /* display: contents makes this wrapper invisible to #workspace's own layout
@@ -1069,13 +1117,19 @@ body {
   min-width: 0;
 }
 
+/* Target ~52px, hard max 60px, INCLUDING padding/borders -- a narrow
+   vertical rail at the canvas's own edge (Pixquare's own size/opacity
+   slider column), never a second wide sidebar. With #tool-size-number's own
+   width below (2.8em) this comes to roughly 2(border) + 2*2(outer padding)
+   + 2.8em content ≈ 4 + 2.8*13.6 ≈ 42px -- comfortably under the hard max,
+   with margin for different default font sizes. */
 .studio-layout #studio-side-rail {
   flex: 0 0 auto;
   display: flex;
   flex-direction: row;
   align-items: stretch;
   gap: 2px;
-  padding: 10px 6px;
+  padding: 8px 1px;
   background: var(--ribbon-bg);
   border-right: 1px solid var(--border);
   overflow-y: auto;
@@ -1085,8 +1139,8 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
+  gap: 5px;
+  padding: 2px 0;
 }
 
 .side-rail-label {
