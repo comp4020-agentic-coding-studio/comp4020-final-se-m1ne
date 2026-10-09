@@ -132,7 +132,7 @@ it("Public pixel draw rejects a non-integer point, an out-of-bounds point, and a
   const outOfBounds = await postJson("/api/pixels/draw", {
     color: "#1d1d1d",
     size: 1,
-    points: [{ x: 512, y: 0 }], // Public is 512 wide: valid x is 0..511
+    points: [{ x: 2048, y: 0 }], // Public is 2048 wide: valid x is 0..2047
   });
   expect(outOfBounds.status).toBe(400);
 
@@ -157,7 +157,7 @@ it("Public pixel erase rejects the same malformed shapes as draw, writing nothin
     const res = await postJson("/api/pixels/erase", { size: badSize, points: [{ x: 1, y: 1 }] });
     expect(res.status).toBe(400);
   }
-  const outOfBounds = await postJson("/api/pixels/erase", { size: 1, points: [{ x: 0, y: 288 }] }); // height is 288: valid y is 0..287
+  const outOfBounds = await postJson("/api/pixels/erase", { size: 1, points: [{ x: 0, y: 1152 }] }); // height is 1152: valid y is 0..1151
   expect(outOfBounds.status).toBe(400);
   const after = await getJson("/api/pixels");
   expect((after.body as Op[]).length).toBe((before.body as Op[]).length);

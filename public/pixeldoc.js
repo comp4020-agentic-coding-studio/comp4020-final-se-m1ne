@@ -9,8 +9,8 @@
 
 import { cssPointToNormalized, documentPointToPixel } from "./viewport.js";
 
-export const PUBLIC_PIXEL_WIDTH = 512;
-export const PUBLIC_PIXEL_HEIGHT = 288;
+export const PUBLIC_PIXEL_WIDTH = 2048;
+export const PUBLIC_PIXEL_HEIGHT = 1152;
 
 // The four Private pixel-art studio resolutions server/index.js accepts.
 // Kept in sync by hand -- the same small, deliberate duplication this app
@@ -122,6 +122,32 @@ export function buildRenderOps(allOps, pendingOps, current, ownerId) {
   let seq = nextSyntheticSeq(allOps);
   const stamped = local.map((op) => ({ ...op, ownerId, seq: seq++ }));
   return [...allOps, ...stamped];
+}
+
+// An op's own bounding box in integer cell space, padded by half its brush
+// size -- mirrors public/app.js's own opNormalizedBounds/opPixelBounds
+// caching (the freehand engine's equivalent), adapted to integer cells. Used
+// to cheaply decide which historical ops could possibly affect a given
+// region, without re-deriving each op's exact touched-cell set (that's
+// public/pixelgrid.js's cellsForStroke's job, and is more expensive than a
+// bounding box alone needs to be for a yes/no overlap test).
+export function cellBoundsForPoints(points, size) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const pad = Math.ceil(size / 2);
+  return { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+}
+
+export function boundsIntersect(a, b) {
+  return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
 }
 
 // Removes exactly one finished-but-unconfirmed gesture from `pendingOps`,

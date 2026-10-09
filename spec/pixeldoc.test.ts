@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  boundsIntersect,
   buildRenderOps,
+  cellBoundsForPoints,
   cellFromClientPoint,
   clampBrushSize,
   DEFAULT_PIXEL_RESOLUTION,
@@ -21,7 +23,7 @@ import { clampZoom, fitZoom, stepZoom } from "../public/viewport.js";
 // --- Pixel document selection -------------------------------------------------
 
 describe("resolveEditorMode", () => {
-  it("Public (roomCode null) is unconditionally the pixel wall at 512x288, regardless of any room argument", () => {
+  it("Public (roomCode null) is unconditionally the pixel wall at 2048x1152, regardless of any room argument", () => {
     expect(resolveEditorMode(null, null)).toEqual({ mode: "pixel", width: PUBLIC_PIXEL_WIDTH, height: PUBLIC_PIXEL_HEIGHT });
     expect(resolveEditorMode(null, { kind: "legacy" })).toEqual({
       mode: "pixel",
@@ -140,10 +142,13 @@ describe("cellFromClientPoint", () => {
     expect(cellFromClientPoint(9999, 9999, rect, 32, 32)).toEqual({ x: 31, y: 31 });
   });
 
-  it("resolves correctly for the Public document's own 512x288 grid", () => {
-    const rect = { left: 0, top: 0, width: 512, height: 288 }; // 100% zoom
+  it("resolves correctly for the Public document's own 2048x1152 grid", () => {
+    const rect = { left: 0, top: 0, width: PUBLIC_PIXEL_WIDTH, height: PUBLIC_PIXEL_HEIGHT }; // 100% zoom
     expect(cellFromClientPoint(0, 0, rect, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT)).toEqual({ x: 0, y: 0 });
-    expect(cellFromClientPoint(511, 287, rect, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT)).toEqual({ x: 511, y: 287 });
+    expect(cellFromClientPoint(PUBLIC_PIXEL_WIDTH - 1, PUBLIC_PIXEL_HEIGHT - 1, rect, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT)).toEqual({
+      x: PUBLIC_PIXEL_WIDTH - 1,
+      y: PUBLIC_PIXEL_HEIGHT - 1,
+    });
   });
 });
 
@@ -167,9 +172,9 @@ describe("zoom for pixel documents (public/viewport.js's existing generic functi
     expect(zoom).toBe(PIXEL_MAX_ZOOM);
   });
 
-  it("fitZoom for the Public 512x288 document behaves like a normal large-canvas fit", () => {
-    const zoom = fitZoom(1024, 576, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT, 0, PIXEL_MIN_ZOOM, PIXEL_MAX_ZOOM);
-    expect(zoom).toBe(2); // the limiting axis is width: 1024/512 = 2, height 576/288 = 2 too
+  it("fitZoom for the Public 2048x1152 document behaves like a normal large-canvas fit", () => {
+    const zoom = fitZoom(4096, 2304, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT, 0, PIXEL_MIN_ZOOM, PIXEL_MAX_ZOOM);
+    expect(zoom).toBe(2); // the limiting axis is width: 4096/2048 = 2, height 2304/1152 = 2 too
   });
 
   it("clampZoom and stepZoom work unchanged with the pixel range/levels", () => {
@@ -181,6 +186,37 @@ describe("zoom for pixel documents (public/viewport.js's existing generic functi
 });
 
 // --- Local-pending-gesture bookkeeping (shared with Step 6's SSE reuse) ------
+
+// --- Bounded-region math for the incremental erase-reveal repaint ----------
+// (the performance path that avoids a full-history replay on every pointer
+// movement for a large, populated document -- see public/pixel-editor.js's
+// renderCurrentDelta)
+
+describe("cellBoundsForPoints / boundsIntersect", () => {
+  it("computes the exact bounding box of a single point, padded by half the brush size", () => {
+    expect(cellBoundsForPoints([{ x: 10, y: 10 }], 4)).toEqual({ minX: 8, minY: 8, maxX: 12, maxY: 12 });
+  });
+
+  it("computes the bounding box spanning multiple points", () => {
+    expect(cellBoundsForPoints([{ x: 0, y: 5 }, { x: 10, y: 0 }, { x: 3, y: 8 }], 2)).toEqual({
+      minX: -1, minY: -1, maxX: 11, maxY: 9,
+    });
+  });
+
+  it("two overlapping boxes intersect; two disjoint boxes do not", () => {
+    const a = { minX: 0, minY: 0, maxX: 10, maxY: 10 };
+    const overlapping = { minX: 5, minY: 5, maxX: 15, maxY: 15 };
+    const disjoint = { minX: 20, minY: 20, maxX: 30, maxY: 30 };
+    expect(boundsIntersect(a, overlapping)).toBe(true);
+    expect(boundsIntersect(a, disjoint)).toBe(false);
+  });
+
+  it("boxes that merely touch at an edge count as intersecting (inclusive boundary)", () => {
+    const a = { minX: 0, minY: 0, maxX: 10, maxY: 10 };
+    const touching = { minX: 10, minY: 0, maxX: 20, maxY: 10 };
+    expect(boundsIntersect(a, touching)).toBe(true);
+  });
+});
 
 describe("nextSyntheticSeq / buildRenderOps / removePendingOp", () => {
   it("nextSyntheticSeq is one past the highest seq present, or 1 for an empty history", () => {

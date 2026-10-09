@@ -181,8 +181,8 @@ app.post("/api/ops/erase", (req, res) => handleErase(req, res, null));
 // size 1-8) that is never silently reinterpreted as, or accepted on, a
 // freehand route, and vice versa -- see the room-kind guards further below.
 
-const PUBLIC_PIXEL_WIDTH = 512;
-const PUBLIC_PIXEL_HEIGHT = 288;
+const PUBLIC_PIXEL_WIDTH = 2048;
+const PUBLIC_PIXEL_HEIGHT = 1152;
 const PIXEL_RESOLUTIONS = [32, 64, 128, 256];
 const MIN_BRUSH_SIZE = 1;
 const MAX_BRUSH_SIZE = 8;
@@ -634,7 +634,7 @@ app.post("/api/rooms/:code/ops/erase", (req, res) => {
 // --- Pixel-art Private studios ----------------------------------------------
 // Mirrors the Public pixel routes above, scoped to one room and validated
 // against that room's own stored resolution instead of the fixed Public
-// 512x288 grid. Gated exactly like the legacy routes above: an unknown or
+// grid. Gated exactly like the legacy routes above: an unknown or
 // expired code 404s first (same getActiveRoom check every other room route
 // uses), then a legacy (non-pixel) room is rejected with 400 rather than
 // silently accepting freehand-shaped data reinterpreted as pixels.

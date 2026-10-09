@@ -745,23 +745,36 @@ body {
 /* --- Pixel-art mode additions (Step 5) --------------------------------------
    Applied only by public/pixel-editor.js (public/app.js never adds these
    classes or unhides these elements, so the untouched legacy editor is
-   visually unaffected). A transparent checkerboard behind the document
-   instead of a literal white page, crisp nearest-neighbour scaling instead
-   of the browser's default smoothing, and an optional fine grid at high
-   zoom. All three are presentation only -- none of them touch #canvas's own
-   backing-store bitmap, so none of them can contaminate stored artwork. */
+   visually unaffected). Crisp nearest-neighbour scaling instead of the
+   browser's default smoothing, a document background that's either a literal
+   opaque colour or (Private only, a transparent document's own background
+   metadata) a checkerboard, and an optional fine grid at high zoom. All of
+   this is presentation only -- none of it touches #canvas's own backing-store
+   bitmap, so none of it can contaminate stored artwork. */
 #canvas.pixel-canvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* Public is always opaque white (never a checkerboard); a Private document
+   with background.kind "white" (or "custom", via an inline background-color
+   pixel-editor.js sets directly instead of this class) uses the same rule. */
+#canvas.pixel-bg-white {
+  background-color: #ffffff;
+}
+
+/* Private only, background.kind "transparent": true alpha transparency in
+   the stored artwork, indicated here purely visually. */
+#canvas.pixel-bg-checkerboard {
   background-color: #ffffff;
   background-image: linear-gradient(45deg, #d8d8d8 25%, transparent 25%),
     linear-gradient(-45deg, #d8d8d8 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #d8d8d8 75%),
     linear-gradient(-45deg, transparent 75%, #d8d8d8 75%);
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
 }
 
-:root[data-theme="dark"] #canvas.pixel-canvas {
+:root[data-theme="dark"] #canvas.pixel-bg-checkerboard {
   background-color: #2b2b2f;
   background-image: linear-gradient(45deg, #3a3a40 25%, transparent 25%),
     linear-gradient(-45deg, #3a3a40 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #3a3a40 75%),

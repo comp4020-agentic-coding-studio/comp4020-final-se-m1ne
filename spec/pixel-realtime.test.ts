@@ -20,7 +20,7 @@ const baseUrl = inject("baseUrl");
 // take roomId as a parameter; Public is just roomId = null) against a room
 // instead of Public, specifically to get a scope no other file can inject
 // noise into. The handful of tests that must specifically prove something
-// about Public (its own 512x288 identity, or true cross-scope isolation)
+// about Public (its own 2048x1152 identity, or true cross-scope isolation)
 // are written to tolerate interleaved noise from other files rather than
 // assume exclusive access to the stream.
 
@@ -177,7 +177,7 @@ const PIXEL_DRAW = { color: "#1d1d1d", size: 2, points: [{ x: 5, y: 5 }] };
 // --- 2. Snapshot-first behaviour ---------------------------------------------
 
 describe("snapshot-first behaviour", () => {
-  it("the Public pixel stream's first event is a sync snapshot reporting Public's own 512x288 grid and every existing pixel op in seq order", async () => {
+  it("the Public pixel stream's first event is a sync snapshot reporting Public's own 2048x1152 grid and every existing pixel op in seq order", async () => {
     const a = await postJson("/api/pixels/draw", PIXEL_DRAW);
     const b = await postJson("/api/pixels/draw", { ...PIXEL_DRAW, points: [{ x: 6, y: 6 }] }, a.cookie);
 
@@ -185,8 +185,8 @@ describe("snapshot-first behaviour", () => {
     const first = await stream.next();
     expect(first.event).toBe("sync");
     expect(first.data.docKind).toBe("pixel");
-    expect(first.data.width).toBe(512);
-    expect(first.data.height).toBe(288);
+    expect(first.data.width).toBe(2048);
+    expect(first.data.height).toBe(1152);
     const ids = first.data.ops.map((op: any) => op.id);
     expect(ids).toContain(a.body.id);
     expect(ids).toContain(b.body.id);
@@ -491,7 +491,7 @@ describe("ephemeral cursors", () => {
     await publicStream.next();
 
     const outOfBoundsForRoom = await postJson(`/api/rooms/${code}/pixels/cursor`, {
-      x: 40, // valid on Public's 512-wide grid, but out of bounds for a 32x32 room
+      x: 40, // valid on Public's 2048-wide grid, but out of bounds for a 32x32 room
       y: 0,
       showCursor: true,
       showNickname: false,
