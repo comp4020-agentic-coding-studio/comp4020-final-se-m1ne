@@ -107,6 +107,27 @@ export function sliderPositionToZoom(position, minZoom, maxZoom) {
   return Math.exp(logMin + clampedPosition * (logMax - logMin));
 }
 
+// Below this many screen (CSS) pixels per logical pixel, individual grid
+// cells are too small for gridlines to help rather than just add noise --
+// `zoom` in this app IS already "screen px per logical px" by construction
+// (canvas.style.width is always gridWidth * zoom), so this is compared
+// directly against it, no separate unit conversion needed.
+export const GRID_MIN_ZOOM_FOR_DISPLAY = 8;
+
+// The ONE decision point for whether the pixel-grid overlay should currently
+// be visible: the user's own ON/OFF preference (defaults ON, persisted in
+// localStorage -- see public/pixel-editor.js) always wins when OFF; when ON,
+// the grid is still automatically suppressed below GRID_MIN_ZOOM_FOR_DISPLAY
+// so a zoomed-out view is never swamped with illegible grid noise. The
+// preference itself is never mutated by zooming -- suppressing the grid at
+// low zoom is a temporary rendering decision, not a change to what the user
+// asked for, so zooming back in reveals the grid again without the user
+// having to re-enable it.
+export function shouldShowPixelGrid(zoom, gridPreferenceOn, minZoomForGrid = GRID_MIN_ZOOM_FOR_DISPLAY) {
+  if (!gridPreferenceOn) return false;
+  return zoom >= minZoomForGrid;
+}
+
 // Decides which editor a page should boot, given the parsed room code (null
 // on the Public page) and -- for a room -- that room's own metadata exactly
 // as GET /api/rooms/:code already returns it (server/index.js, Step 3):

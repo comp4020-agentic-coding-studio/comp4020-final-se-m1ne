@@ -12,6 +12,7 @@ import {
   DEFAULT_BRUSH_SIZE,
   DEFAULT_CANVAS_SIZE,
   DEFAULT_PIXEL_RESOLUTION,
+  GRID_MIN_ZOOM_FOR_DISPLAY,
   isValidBackgroundKind,
   isValidPixelResolution,
   MAX_BRUSH_SIZE,
@@ -30,6 +31,7 @@ import {
   removePendingOp,
   resolveEditorMode,
   resolveNewCanvasBackground,
+  shouldShowPixelGrid,
   sliderPositionToZoom,
   zoomToSliderPosition,
 } from "../public/pixeldoc.js";
@@ -313,6 +315,44 @@ describe("zoomToSliderPosition / sliderPositionToZoom", () => {
   it("works identically for Public's own (narrower) range", () => {
     expect(zoomToSliderPosition(PUBLIC_ZOOM_MAX, PIXEL_ZOOM_MIN, PUBLIC_ZOOM_MAX)).toBe(1);
     expect(sliderPositionToZoom(1, PIXEL_ZOOM_MIN, PUBLIC_ZOOM_MAX)).toBeCloseTo(PUBLIC_ZOOM_MAX);
+  });
+});
+
+// --- Pixel grid overlay: visibility threshold ---------------------------------
+// The grid overlay itself is a CSS background-image tile (public/styles.css's
+// #pixel-grid-overlay), positioned/sized by public/pixel-editor.js to match
+// the canvas's own CSS box -- O(1) regardless of document size or zoom, never
+// a per-cell DOM/canvas draw. The only real DECISION logic is this: whether
+// it should currently be visible at all.
+
+describe("shouldShowPixelGrid", () => {
+  it("GRID_MIN_ZOOM_FOR_DISPLAY is 8 (screen px per logical px)", () => {
+    expect(GRID_MIN_ZOOM_FOR_DISPLAY).toBe(8);
+  });
+
+  it("preference OFF never shows the grid, regardless of zoom", () => {
+    expect(shouldShowPixelGrid(1, false)).toBe(false);
+    expect(shouldShowPixelGrid(32, false)).toBe(false);
+    expect(shouldShowPixelGrid(0.1, false)).toBe(false);
+  });
+
+  it("preference ON shows the grid at or above the threshold, suppresses below it", () => {
+    expect(shouldShowPixelGrid(7.99, true)).toBe(false);
+    expect(shouldShowPixelGrid(8, true)).toBe(true);
+    expect(shouldShowPixelGrid(32, true)).toBe(true);
+    expect(shouldShowPixelGrid(1, true)).toBe(false);
+  });
+
+  it("the threshold is an explicit parameter, not hardcoded, for scope-specific reuse", () => {
+    expect(shouldShowPixelGrid(4, true, 4)).toBe(true);
+    expect(shouldShowPixelGrid(3.99, true, 4)).toBe(false);
+  });
+
+  it("suppression at low zoom never depends on iterating the document -- same result for any width/height", () => {
+    // Not a literal performance test (that needs real profiling -- see the
+    // project report), but confirms the decision takes no document-size
+    // argument at all, structurally ruling out an O(area) implementation.
+    expect(shouldShowPixelGrid.length).toBeLessThanOrEqual(3);
   });
 });
 

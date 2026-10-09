@@ -43,6 +43,8 @@ import {
   PRIVATE_ZOOM_LEVELS,
   zoomToSliderPosition,
   sliderPositionToZoom,
+  GRID_MIN_ZOOM_FOR_DISPLAY,
+  shouldShowPixelGrid,
   resolveEditorMode,
   cellFromClientPoint,
   buildRenderOps,
@@ -106,6 +108,7 @@ const documentSettingsPopover = document.getElementById("document-settings-popov
 const documentSettingsClose = document.getElementById("document-settings-close");
 const documentSettingsBody = document.getElementById("document-settings-body");
 const documentDimensions = document.getElementById("document-dimensions");
+const gridToggle = document.getElementById("grid-toggle");
 
 // Theme is a local UI preference only -- never sent to the server, never part
 // of collaborative state. Identical in spirit to public/app.js's own theme
@@ -228,6 +231,11 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   // actually persists (their redo branch was just abandoned server-side).
   let myRedoCount = 0;
   let zoom = PIXEL_ZOOM_MIN;
+  // The user's own ON/OFF grid preference -- a pure local display
+  // preference (like theme), never sent to the server, never part of
+  // collaborative state, defaulting to ON per spec. Persisted so it
+  // survives a reload, the same way theme already does.
+  let gridPreferenceOn = localStorage.getItem("pixelGridOn") !== "false";
 
   // --- Rendering -------------------------------------------------------------
   // A full replay of the entire op history (public/pixelgrid.js's
@@ -312,8 +320,14 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   function paintDeltaCells(deltaCells) {
     if (deltaCells.length === 0) return;
     if (current.kind === "draw") {
+      // Every cell in one call shares current.color -- fillStyle is set
+      // ONCE here, not per cell. A large brush (up to MAX_BRUSH_SIZE=100)
+      // can touch thousands of cells in a single frame, and re-parsing the
+      // identical colour string on every one of those fillRect calls is
+      // pure waste; this is a correctness-neutral micro-optimization (the
+      // painted pixels are bit-for-bit identical either way).
+      ctx.fillStyle = current.color;
       for (const { x, y } of deltaCells) {
-        ctx.fillStyle = current.color;
         ctx.fillRect(x, y, 1, 1);
       }
       return;
@@ -435,16 +449,30 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   // fails to persist is NOT left visible: its pixels were never actually
   // saved, so keeping them on screen would be exactly the "incorrect local
   // result" this editor must avoid, not a harmless best-effort leniency.
-  // Either way, the gesture leaves pendingOps and a committed-grid rebuild +
-  // full repaint always follows -- the ONE full replay this gesture ever
-  // causes, at its own completion, not per frame -- so the canvas never
-  // shows a state neither the server nor allOps agrees with.
+  // Either way, the gesture leaves pendingOps and a committed-grid rebuild
+  // always follows -- rebuildCommittedGrid's own cache (committedGrid/
+  // myOwnedCellKeys) must reflect reality either way, for every FUTURE
+  // lookup (the next gesture's bounded erase replay, ownership checks, the
+  // eyedropper, the Public fade tick).
+  //
+  // A full CANVAS REPAINT (renderFromCommittedGrid -- clearRect over the
+  // whole document, then redraw every known cell, cost proportional to the
+  // document's total painted-cell history) is a different matter: on
+  // SUCCESS, the gesture's own incremental rendering (paintDeltaCells, run
+  // every frame during the drag) has already painted the exactly correct
+  // final pixels for every cell this gesture touched -- a draw always wins
+  // outright, and an erase's own live rendering already resolved whatever
+  // it reveals via a bounded replay -- so a second full repaint here would
+  // recompute and redraw thousands of already-correct pixels for nothing.
+  // It's only needed on FAILURE, to visually roll back an optimistic
+  // rendering the server never actually accepted.
   async function persistGesture(finished) {
     const endpoint = finished.kind === "erase" ? eraseUrl : drawUrl;
     const body =
       finished.kind === "erase"
         ? { size: finished.size, points: finished.points }
         : { color: finished.color, size: finished.size, points: finished.points };
+    let succeeded = false;
     try {
       const res = await fetch(endpoint, {
         method: "POST",
@@ -455,13 +483,14 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
       const saved = await res.json();
       allOps.push(saved);
       myRedoCount = 0; // this owner's remaining redo branch in this scope was just abandoned server-side
+      succeeded = true;
     } catch {
       // Left out of allOps entirely -- removed from pendingOps below, so the
       // next rebuild reflects only what the server actually has.
     } finally {
       pendingOps = removePendingOp(pendingOps, finished);
       rebuildCommittedGrid();
-      renderFromCommittedGrid();
+      if (!succeeded) renderFromCommittedGrid();
       updateUndoRedoButtons();
     }
   }
@@ -690,11 +719,20 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   // applyZoom, so there is exactly one zoom state, never a second one to
   // drift out of sync.
   const FIT_MARGIN_PX = 24;
-  const GRID_OVERLAY_MIN_ZOOM = 8; // below this, individual cells are too small for a grid to help rather than add noise
   const ZOOM_SLIDER_RESOLUTION = Number(zoomSlider.max) || 1000;
 
+  // Viewport-bounded by construction: this is one CSS background-image tile
+  // pattern sized/positioned to match the canvas's own CSS box (never a line
+  // per logical pixel, and never iterated per cell), so its cost is O(1)
+  // regardless of document size or zoom -- the same technique behind every
+  // "repeating background" grid overlay. shouldShowPixelGrid (pixeldoc.js)
+  // is the one decision point for visibility: the user's own gridPreferenceOn
+  // toggle always wins when OFF; when ON, still auto-suppressed below
+  // GRID_MIN_ZOOM_FOR_DISPLAY so a zoomed-out view never drowns in noise --
+  // suppression never changes gridPreferenceOn itself, so zooming back in
+  // reveals the grid again without re-enabling anything.
   function updateGridOverlay() {
-    if (zoom < GRID_OVERLAY_MIN_ZOOM) {
+    if (!shouldShowPixelGrid(zoom, gridPreferenceOn, GRID_MIN_ZOOM_FOR_DISPLAY)) {
       gridOverlay.hidden = true;
       return;
     }
@@ -705,6 +743,21 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     gridOverlay.style.height = canvas.style.height;
     gridOverlay.style.backgroundSize = `${zoom}px ${zoom}px`;
   }
+
+  // Reflects the user's own Grid preference in the Document popover --
+  // separate from (and never changed by) updateGridOverlay's own temporary
+  // low-zoom suppression above.
+  function syncGridToggleUI() {
+    gridToggle.textContent = gridPreferenceOn ? "On" : "Off";
+    gridToggle.setAttribute("aria-pressed", String(gridPreferenceOn));
+  }
+  gridToggle.addEventListener("click", () => {
+    gridPreferenceOn = !gridPreferenceOn;
+    localStorage.setItem("pixelGridOn", String(gridPreferenceOn));
+    syncGridToggleUI();
+    updateGridOverlay();
+  });
+  syncGridToggleUI();
 
   // Keeps whatever document point is currently under (anchorClientX,
   // anchorClientY) -- the viewport's own centre by default, or the pointer
@@ -742,11 +795,34 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     applyZoom(fitZoom(canvasViewport.clientWidth, canvasViewport.clientHeight, gridWidth, gridHeight, FIT_MARGIN_PX, PIXEL_ZOOM_MIN, zoomMax));
   }
 
+  // A high-frequency zoom source (dragging the slider, a fast wheel/trackpad
+  // burst) can fire many events within a single animation frame; applyZoom
+  // itself does two getBoundingClientRect reads (before/after, needed for
+  // the anchor math above) plus a canvas.style.width/height write, and on a
+  // large on-screen canvas box that write is a real reflow+repaint cost for
+  // the browser's own compositor. Coalescing to at most one applyZoom call
+  // per animation frame -- keeping only the LATEST request, exactly like
+  // queueFrame/renderCurrentDelta already does for a drawing gesture -- cuts
+  // that cost without changing the final result: the zoom level converged on
+  // is identical, only intermediate sub-frame steps are coalesced.
+  let pendingZoomRequest = null;
+  let zoomFrameHandle = null;
+  function scheduleZoom(nextZoom, anchorClientX, anchorClientY) {
+    pendingZoomRequest = { nextZoom, anchorClientX, anchorClientY };
+    if (zoomFrameHandle === null) {
+      zoomFrameHandle = requestAnimationFrame(() => {
+        zoomFrameHandle = null;
+        const { nextZoom, anchorClientX, anchorClientY } = pendingZoomRequest;
+        applyZoom(nextZoom, anchorClientX, anchorClientY);
+      });
+    }
+  }
+
   zoomInButton.addEventListener("click", () => applyZoom(stepZoom(zoom, zoomLevels, 1)));
   zoomOutButton.addEventListener("click", () => applyZoom(stepZoom(zoom, zoomLevels, -1)));
   fitButton.addEventListener("click", applyFit);
   zoomSlider.addEventListener("input", () => {
-    applyZoom(sliderPositionToZoom(Number(zoomSlider.value) / ZOOM_SLIDER_RESOLUTION, PIXEL_ZOOM_MIN, zoomMax));
+    scheduleZoom(sliderPositionToZoom(Number(zoomSlider.value) / ZOOM_SLIDER_RESOLUTION, PIXEL_ZOOM_MIN, zoomMax));
   });
   // ctrl/cmd+wheel only -- a plain wheel/trackpad scroll keeps doing native
   // #canvas-viewport panning (overflow: auto), untouched. preventDefault
@@ -757,7 +833,7 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     (event) => {
       if (!(event.ctrlKey || event.metaKey)) return;
       event.preventDefault();
-      applyZoom(zoom * Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY);
+      scheduleZoom(zoom * Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY);
     },
     { passive: false },
   );
@@ -832,17 +908,50 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   // its direct numeric input -- #size-group's own `.size-control` wrapper
   // div, moved whole via appendChild (which MOVES a node, keeping its id,
   // markup, and every already-wired listener) -- relocate to the canvas's
-  // own left edge (#studio-side-rail), next to the reserved, genuinely-
-  // disabled Opacity slot already in the markup. #size-group itself is left
-  // behind empty (its "Size" label has no content to label in a slim top
-  // toolbar), so it's hidden rather than shown as a stray empty group.
-  // Applied unconditionally (both Public and Private): mode-specific
-  // differences are controlled below by explicit Public/Private state
-  // (room navigation, document settings), never by duplicating this shell.
+  // own left edge (#studio-side-rail). #size-group itself is left behind
+  // empty (its "Size" label has no content to label in a slim top toolbar),
+  // so it's hidden rather than shown as a stray empty group. Applied
+  // unconditionally (both Public and Private): mode-specific differences are
+  // controlled below by explicit Public/Private state (room navigation,
+  // document settings content), never by duplicating this shell.
   workspace.classList.add("studio-layout");
   studioSideRail.hidden = false;
   sideRailBrushSize.appendChild(sizeGroup.querySelector(".size-control"));
   sizeGroup.hidden = true;
+
+  // #document-settings-button/#document-settings-popover: shown for BOTH
+  // Public and Private (dimensions + the Grid toggle apply to either); a
+  // pixel-art room additionally relocates its own room code/background
+  // control into the popover body, below. Never shown for a legacy room --
+  // this code never runs for one at all (main() hands off to app.js first).
+  documentSettingsButton.hidden = false;
+  documentDimensions.textContent = `${gridWidth} × ${gridHeight}`;
+
+  function openDocumentSettingsPopover() {
+    const rect = documentSettingsButton.getBoundingClientRect();
+    const popoverWidth = 240;
+    documentSettingsPopover.style.top = `${rect.bottom + 6}px`;
+    documentSettingsPopover.style.left = `${Math.min(rect.left, window.innerWidth - popoverWidth - 8)}px`;
+    documentSettingsPopover.hidden = false;
+    documentSettingsButton.setAttribute("aria-expanded", "true");
+  }
+  function closeDocumentSettingsPopover() {
+    documentSettingsPopover.hidden = true;
+    documentSettingsButton.setAttribute("aria-expanded", "false");
+  }
+  documentSettingsButton.addEventListener("click", () => {
+    if (documentSettingsPopover.hidden) openDocumentSettingsPopover();
+    else closeDocumentSettingsPopover();
+  });
+  documentSettingsClose.addEventListener("click", closeDocumentSettingsPopover);
+  document.addEventListener("pointerdown", (event) => {
+    if (documentSettingsPopover.hidden) return;
+    if (documentSettingsPopover.contains(event.target) || documentSettingsButton.contains(event.target)) return;
+    closeDocumentSettingsPopover();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (!documentSettingsPopover.hidden && event.key === "Escape") closeDocumentSettingsPopover();
+  });
 
   if (isPublicPixelWall) {
     // The New Canvas dialog: independent width/height and a background
@@ -911,53 +1020,25 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     publicRoomControls.hidden = true;
     privateRoomControls.hidden = false;
 
-    // Room code and background control relocate into #document-settings-
-    // popover, reached through the compact #document-settings-button --
+    // Room code and background control additionally relocate into the
+    // (already shared, already-wired-above) #document-settings-popover --
     // not a full-width persistent row. #back-to-public is deliberately NOT
     // relocated: it stays exactly where the markup already has it, a direct
     // sibling of #document-settings-button inside #private-room-controls,
     // so it remains visible in the header without opening anything -- a
     // directly-visible Back to Public control is mandatory, never exclusive
     // to the Document popover.
-    documentSettingsButton.hidden = false;
     documentSettingsBody.appendChild(roomCodeLabel);
     documentSettingsBody.appendChild(roomBackgroundControl);
     documentSettingsBody.appendChild(roomBackgroundColourInput);
 
-    function openDocumentSettingsPopover() {
-      const rect = documentSettingsButton.getBoundingClientRect();
-      const popoverWidth = 240;
-      documentSettingsPopover.style.top = `${rect.bottom + 6}px`;
-      documentSettingsPopover.style.left = `${Math.min(rect.left, window.innerWidth - popoverWidth - 8)}px`;
-      documentSettingsPopover.hidden = false;
-      documentSettingsButton.setAttribute("aria-expanded", "true");
-    }
-    function closeDocumentSettingsPopover() {
-      documentSettingsPopover.hidden = true;
-      documentSettingsButton.setAttribute("aria-expanded", "false");
-    }
-    documentSettingsButton.addEventListener("click", () => {
-      if (documentSettingsPopover.hidden) openDocumentSettingsPopover();
-      else closeDocumentSettingsPopover();
-    });
-    documentSettingsClose.addEventListener("click", closeDocumentSettingsPopover);
-    document.addEventListener("pointerdown", (event) => {
-      if (documentSettingsPopover.hidden) return;
-      if (documentSettingsPopover.contains(event.target) || documentSettingsButton.contains(event.target)) return;
-      closeDocumentSettingsPopover();
-    });
-    window.addEventListener("keydown", (event) => {
-      if (!documentSettingsPopover.hidden && event.key === "Escape") closeDocumentSettingsPopover();
-    });
-
     // Read-only document information -- this room's dimensions are fixed
-    // forever at creation, so they are shown here (and in the status bar's
-    // own statusDocSize, set above), never as an editable control inside a
+    // forever at creation (already shown generically above, alongside the
+    // status bar's own statusDocSize), never as an editable control inside a
     // room. Background, unlike dimensions, CAN be changed after creation --
     // see changeBackground below, which never touches dimensions, drawing
     // content, or pixel ownership.
     roomCodeLabel.textContent = `Room: ${roomCode}`;
-    documentDimensions.textContent = `${gridWidth} × ${gridHeight}`;
 
     roomBackgroundSelect.value = background.kind;
     roomBackgroundColourInput.hidden = background.kind !== "custom";

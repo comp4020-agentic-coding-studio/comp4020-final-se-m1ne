@@ -173,4 +173,26 @@ describe("Pencil/Eraser independent size -- real DOM, real module", () => {
     expect(draw?.body.size).toBe(5);
     expect(erase?.body.size).toBe(8);
   });
+
+  it("size 100 is stored and reflected in full -- not truncated to '10' at the data level", () => {
+    // This covers the DATA half of the reported truncation bug (the input's
+    // own .value is the real, full "100", never silently clamped to two
+    // digits). The other half -- that "100" is visually fully readable, not
+    // clipped by the input box's own width/padding/native spin buttons -- is
+    // a CSS/paint concern jsdom cannot render and so cannot verify; that part
+    // was fixed by widening #tool-size-number and removing the native
+    // spin-button arrows (public/styles.css), and needs a manual visual
+    // check (see the project report).
+    const slider = document.getElementById("tool-size-slider") as HTMLInputElement;
+    const number = document.getElementById("tool-size-number") as HTMLInputElement;
+
+    fireInput(number, "100");
+    expect(number.value).toBe("100");
+    expect(slider.value).toBe("100");
+
+    fireInput(slider, "100");
+    expect(number.value).toBe("100");
+    expect(slider.max).toBe("100");
+    expect(number.max).toBe("100");
+  });
 });
