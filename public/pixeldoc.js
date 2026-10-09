@@ -46,15 +46,47 @@ export const BACKGROUND_KINDS = ["transparent", "white", "custom"];
 export const DEFAULT_BACKGROUND_COLOR = "#ffffff";
 
 // public/viewport.js's own MIN_ZOOM/MAX_ZOOM/ZOOM_LEVELS were sized for the
-// 1920x1080 freehand document, where 400% is already enormous. A 32x32 pixel
-// studio needs the opposite problem solved -- zooming an individual logical
-// pixel up to tens of CSS pixels is the normal way to work with pixel art --
-// so pixel documents use their own range with the exact same generic
-// clampZoom/fitZoom/stepZoom functions (every one of them already takes
-// min/max/levels as parameters), never a second zoom implementation.
-export const PIXEL_MIN_ZOOM = 1;
-export const PIXEL_MAX_ZOOM = 32;
-export const PIXEL_ZOOM_LEVELS = [1, 2, 4, 8, 12, 16, 24, 32];
+// 1920x1080 freehand document, where 400% is already enormous. Pixel
+// documents need a much wider range in the OTHER direction too -- zooming
+// below 100% to see a large Public wall, or a very small Private studio
+// zoomed up to tens of CSS pixels per logical pixel -- so pixel documents use
+// their own range with the exact same generic clampZoom/fitZoom/stepZoom
+// functions (every one of them already takes min/max/levels as parameters),
+// never a second zoom implementation. The minimum is shared; only the
+// maximum differs by scope (kept in sync by hand with nothing server-side --
+// zoom is pure display, never validated or persisted).
+export const PIXEL_ZOOM_MIN = 0.1; // 10% -- also the floor fitZoom itself can land on for a document larger than the viewport
+export const PUBLIC_ZOOM_MAX = 8; // 800%
+export const PRIVATE_ZOOM_MAX = 32; // 3200%
+
+// Discrete steps the Zoom In/Out BUTTONS cycle through (see stepZoom) -- the
+// continuous SLIDER (zoomToSliderPosition/sliderPositionToZoom below) is a
+// separate, unquantized control over the exact same [min, max] range, not
+// limited to these named stops.
+export const PUBLIC_ZOOM_LEVELS = [0.1, 0.25, 0.5, 1, 2, 4, 8];
+export const PRIVATE_ZOOM_LEVELS = [0.1, 0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32];
+
+// A linear slider is unusable across a 0.1-32 (320x) range: half the track
+// would cover 0.1-16 and the other half just 16-32. Mapping slider position
+// through a logarithm instead gives equal visual travel to equal zoom
+// *ratios* (e.g. 25%->50% feels the same drag distance as 400%->800%),
+// which is the standard fix for a wide-ratio zoom control. position is
+// always normalized to [0, 1] -- the caller scales that onto its own actual
+// <input type="range"> integer range.
+export function zoomToSliderPosition(zoomValue, minZoom, maxZoom) {
+  const clamped = Math.min(maxZoom, Math.max(minZoom, zoomValue));
+  const logMin = Math.log(minZoom);
+  const logMax = Math.log(maxZoom);
+  if (logMax === logMin) return 0; // degenerate range guard; never hit with this app's real min/max
+  return (Math.log(clamped) - logMin) / (logMax - logMin);
+}
+
+export function sliderPositionToZoom(position, minZoom, maxZoom) {
+  const clampedPosition = Math.min(1, Math.max(0, position));
+  const logMin = Math.log(minZoom);
+  const logMax = Math.log(maxZoom);
+  return Math.exp(logMin + clampedPosition * (logMax - logMin));
+}
 
 // Decides which editor a page should boot, given the parsed room code (null
 // on the Public page) and -- for a room -- that room's own metadata exactly

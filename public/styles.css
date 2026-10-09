@@ -943,147 +943,231 @@ body {
   gap: 8px;
 }
 
-/* --- Pixquare-inspired Private studio layout ---------------------------------
+/* --- Pixquare/Procreate-inspired Private studio layout -----------------------
    Applied only when public/pixel-editor.js adds .studio-layout to #workspace
-   (a Private pixel-art room; never Public, never a legacy freehand page). A
-   left icon tool rail, a right document/options panel, the canvas filling
-   whatever's left -- replacing the C8 horizontal drawing ribbon's layout for
-   this one mode, without touching a single control's own markup, ids, or
-   event wiring: #tool-group/#size-group/#colour-group are the exact same
-   elements app.js and Public pixel mode already use, simply relocated by JS
-   into #studio-tool-rail/#studio-panel (both already present in the DOM,
-   just empty and hidden outside studio mode) and restyled here by context.
-   The structure leaves an obvious place for a future Layers panel (another
-   .ribbon-group-shaped section inside #studio-panel) without this step
-   building one out. */
-.studio-layout #workspace {
-  display: grid;
-  grid-template-columns: 52px 1fr 260px;
-  grid-template-rows: auto 1fr auto;
-  grid-template-areas:
-    "session session session"
-    "rail canvas panel"
-    "status status status";
-  height: 100%;
+   (a Private pixel-art room; never Public, never a legacy freehand page).
+   Primary tools stay in a compact top toolbar (the existing #tool-ribbon,
+   restyled slimmer here, not replaced); brush size moves to a compact
+   vertical control at the canvas's own left edge (#studio-side-rail), next to
+   a reserved (disabled, non-functional) Opacity slot; the canvas fills
+   whatever's left. No permanent page-height side panels -- the earlier
+   left-rail/right-panel layout this replaces made Tools/Document/Brush/
+   Colour each a full-width row, which is exactly the "broken, not a coherent
+   editor" look this corrects. Every control below is the exact same element
+   (#tool-group, #size-group, #colour-group, #room-code-label, etc.) app.js
+   and Public pixel mode already use -- relocated by JS, never duplicated. */
+
+.studio-layout #tool-ribbon {
+  padding: 4px 10px;
+  gap: 2px;
 }
 
-.studio-layout #session-bar {
-  grid-area: session;
+.studio-layout #tool-ribbon .ribbon-group {
+  padding: 2px 10px;
+}
+
+.studio-layout #tool-group .group-label,
+.studio-layout #colour-group .group-label {
+  display: none; /* icons alone read clearly in a slim top toolbar */
+}
+
+/* display: contents makes this wrapper invisible to #workspace's own layout
+   by default, so #canvas-viewport behaves exactly as it always has for
+   Public/legacy (its own `flex: 1 1 auto` rule applies directly within
+   #workspace's flex column, as if this wrapper didn't exist). Only in studio
+   mode does it become a real flex row placing the side rail beside the
+   canvas. */
+#studio-workspace-row {
+  display: contents;
+}
+
+.studio-layout #studio-workspace-row {
+  display: flex;
+  flex-direction: row;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .studio-layout #canvas-viewport {
-  grid-area: canvas;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.studio-layout #status-bar {
-  grid-area: status;
-}
-
-.studio-layout #tool-ribbon {
-  display: none; /* its children have been relocated into the rail/panel below */
-}
-
-.studio-layout #studio-tool-rail {
-  grid-area: rail;
+.studio-layout #studio-side-rail {
+  flex: 0 0 auto;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 10px 4px;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 2px;
+  padding: 10px 6px;
   background: var(--ribbon-bg);
   border-right: 1px solid var(--border);
   overflow-y: auto;
 }
 
-/* The relocated #tool-group, inside the rail: its own "Tools" label is
-   redundant in a dedicated rail (the rail IS the tools), and its buttons
-   stack vertically here instead of the horizontal ribbon row. */
-.studio-layout #studio-tool-rail .ribbon-group {
-  padding: 0;
-  border-left: none;
+.side-rail-control {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
 }
 
-.studio-layout #studio-tool-rail .group-label {
+.side-rail-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+/* A vertical range input via the standards-based writing-mode approach
+   (supported in current Chrome/Edge/Firefox/Safari) rather than a transform
+   hack -- direction: rtl keeps the usual "up increases the value" feel. */
+.side-rail-control input[type="range"] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 20px;
+  height: 120px;
+  margin: 0;
+  accent-color: var(--focus-ring);
+}
+
+.side-rail-control output {
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+/* The reserved Opacity slot is genuinely disabled, not merely styled to look
+   inert -- there is no handler anywhere that reads its value, and drawing
+   semantics are completely unaffected by it. */
+#tool-opacity-slider:disabled {
+  opacity: 0.45;
+}
+
+.studio-layout #studio-side-rail .size-control {
+  display: contents; /* the relocated #size-group's own wrapper div adds no extra box here */
+}
+
+/* The relocated #tool-size-number (the Brush slot's direct numeric input)
+   stays a normal, compact horizontal field under the vertical slider. */
+.studio-layout #studio-side-rail #tool-size-number {
+  width: 3em;
+  text-align: center;
+}
+
+/* --- Document settings popover ------------------------------------------------
+   Same chrome as #colour-popover/#room-create-popover (shared tokens, same
+   header/body shape) -- room code, read-only dimensions, and (for a pixel-art
+   room) the background control and Leave, reached through a single compact
+   button instead of a permanent full-width row. */
+#document-settings-popover {
+  position: fixed;
+  z-index: 30;
+  width: 240px;
+  background: var(--popover-bg);
+  border: 1px solid var(--popover-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--popover-shadow);
+  padding: 10px;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+
+#document-settings-popover[hidden] {
   display: none;
 }
 
-.studio-layout #studio-tool-rail .group-controls {
-  flex-direction: column;
-  gap: 4px;
-}
-
-.studio-layout #studio-panel {
-  grid-area: panel;
+#document-settings-header {
   display: flex;
-  flex-direction: column;
-  background: var(--ribbon-bg);
-  border-left: 1px solid var(--border);
-  overflow-y: auto;
-  color: var(--text-primary);
-  font-size: 0.85rem;
-}
-
-/* The relocated #size-group/#colour-group read as panel sections here,
-   stacked and full-width, instead of ribbon groups in a horizontal row --
-   same elements, same ids, same listeners, only the surrounding layout
-   context (and this block's own presentation) differs. */
-.studio-layout #studio-panel .ribbon-group {
-  display: block;
-  padding: 12px 14px;
-  border-left: none;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
   border-bottom: 1px solid var(--divider);
 }
 
-.studio-layout #studio-panel .group-controls {
-  flex-wrap: wrap;
-  margin-top: 6px;
+#document-settings-close {
+  border: none;
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-primary);
 }
 
-#studio-document-controls {
+#document-settings-close:hover {
+  background: var(--control-hover-bg);
+}
+
+#document-settings-body {
+  display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  gap: 10px;
+}
+
+.document-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
-/* At narrow widths a fixed three-column grid has nowhere to shrink to --
-   fall back to a single scrollable column instead (session, then a
-   horizontally-scrollable tool rail, the canvas, a horizontally-scrollable
-   panel, then status), so every control stays reachable rather than being
-   hidden entirely. */
+/* The relocated #room-code-label/#room-background-control/#back-to-public
+   read as rows inside this popover instead of inline session-bar chrome --
+   same elements, only the surrounding presentation differs. */
+#document-settings-body #room-code-label,
+#document-settings-body #room-background-control,
+#document-settings-body #back-to-public {
+  width: 100%;
+}
+
+#document-settings-body #room-background-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#document-settings-body #back-to-public {
+  display: block;
+  text-align: center;
+  margin-top: 4px;
+}
+
+/* --- Continuous zoom slider ---------------------------------------------------
+   Logarithmically mapped (public/pixeldoc.js's zoomToSliderPosition/
+   sliderPositionToZoom) so the full 10%-800%/3200% range is usable in one
+   control -- a linear slider would waste most of its travel on the high end.
+   Shared by Public and Private alike, not studio-only. */
+#zoom-slider {
+  width: 90px;
+}
+
 @media (max-width: 700px) {
-  .studio-layout #workspace {
-    display: flex;
+  .studio-layout #studio-workspace-row {
     flex-direction: column;
   }
 
-  .studio-layout #studio-tool-rail {
-    flex: 0 0 auto;
+  .studio-layout #studio-side-rail {
     flex-direction: row;
+    width: auto;
     border-right: none;
     border-bottom: 1px solid var(--border);
     overflow-x: auto;
     overflow-y: visible;
+    justify-content: center;
   }
 
   .studio-layout #canvas-viewport {
-    flex: 1 1 auto;
     min-height: 220px;
   }
 
-  .studio-layout #studio-panel {
-    flex: 0 0 auto;
-    flex-direction: row;
-    border-left: none;
-    border-top: 1px solid var(--border);
-    overflow-x: auto;
-    overflow-y: visible;
-    max-height: 40vh;
-  }
-
-  .studio-layout #studio-panel .ribbon-group {
-    flex: 0 0 auto;
-    border-bottom: none;
-    border-right: 1px solid var(--divider);
+  #zoom-slider {
+    width: 60px;
   }
 }
 

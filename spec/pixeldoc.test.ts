@@ -15,17 +15,21 @@ import {
   MAX_CANVAS_DIMENSION,
   MIN_CANVAS_DIMENSION,
   nextSyntheticSeq,
-  PIXEL_MAX_ZOOM,
-  PIXEL_MIN_ZOOM,
   PIXEL_RESOLUTIONS,
-  PIXEL_ZOOM_LEVELS,
+  PIXEL_ZOOM_MIN,
   PRIVATE_MAX_BRUSH_SIZE,
+  PRIVATE_ZOOM_LEVELS,
+  PRIVATE_ZOOM_MAX,
   PUBLIC_MAX_BRUSH_SIZE,
   PUBLIC_PIXEL_HEIGHT,
   PUBLIC_PIXEL_WIDTH,
+  PUBLIC_ZOOM_LEVELS,
+  PUBLIC_ZOOM_MAX,
   removePendingOp,
   resolveEditorMode,
   resolveNewCanvasBackground,
+  sliderPositionToZoom,
+  zoomToSliderPosition,
 } from "../public/pixeldoc.js";
 import { clampZoom, fitZoom, stepZoom } from "../public/viewport.js";
 
@@ -160,34 +164,101 @@ describe("cellFromClientPoint", () => {
 
 // --- Zoom, adapted to pixel document dimensions (reuses viewport.js as-is) ---
 
-describe("zoom for pixel documents (public/viewport.js's existing generic functions, pixel-specific parameters)", () => {
-  it("PIXEL_MIN_ZOOM/PIXEL_MAX_ZOOM/PIXEL_ZOOM_LEVELS are a wider range than the freehand document's, since a small grid needs much higher magnification to be usable", () => {
-    expect(PIXEL_MIN_ZOOM).toBeGreaterThanOrEqual(1);
-    expect(PIXEL_MAX_ZOOM).toBeGreaterThan(4); // freehand's own MAX_ZOOM
-    expect(PIXEL_ZOOM_LEVELS[0]).toBe(PIXEL_MIN_ZOOM);
-    expect(PIXEL_ZOOM_LEVELS[PIXEL_ZOOM_LEVELS.length - 1]).toBe(PIXEL_MAX_ZOOM);
+describe("zoom range/levels for pixel documents (public/viewport.js's existing generic functions, scope-specific parameters)", () => {
+  it("the shared minimum is 10%, well below 100% -- no frontend minimum clamp prevents zooming out", () => {
+    expect(PIXEL_ZOOM_MIN).toBeLessThan(1);
+    expect(PIXEL_ZOOM_MIN).toBeCloseTo(0.1);
   });
 
-  it("fitZoom scales a small 32x32 document up to fill the available workspace, within the pixel zoom range", () => {
-    const zoom = fitZoom(640, 640, 32, 32, 0, PIXEL_MIN_ZOOM, PIXEL_MAX_ZOOM);
-    expect(zoom).toBe(20); // 640 / 32, comfortably inside [1, 32]
+  it("Private's maximum (3200%) is wider than Public's (800%), each wider than the freehand document's own 400% MAX_ZOOM", () => {
+    expect(PUBLIC_ZOOM_MAX).toBeGreaterThan(4); // freehand's own MAX_ZOOM
+    expect(PRIVATE_ZOOM_MAX).toBeGreaterThan(PUBLIC_ZOOM_MAX);
+    expect(PUBLIC_ZOOM_MAX).toBe(8);
+    expect(PRIVATE_ZOOM_MAX).toBe(32);
   });
 
-  it("fitZoom clamps to PIXEL_MAX_ZOOM when the workspace is large relative to a small document", () => {
-    const zoom = fitZoom(4000, 4000, 32, 32, 0, PIXEL_MIN_ZOOM, PIXEL_MAX_ZOOM);
-    expect(zoom).toBe(PIXEL_MAX_ZOOM);
+  it("each scope's discrete zoom-level list (Zoom In/Out buttons) spans exactly that scope's own [min, max]", () => {
+    expect(PUBLIC_ZOOM_LEVELS[0]).toBe(PIXEL_ZOOM_MIN);
+    expect(PUBLIC_ZOOM_LEVELS[PUBLIC_ZOOM_LEVELS.length - 1]).toBe(PUBLIC_ZOOM_MAX);
+    expect(PRIVATE_ZOOM_LEVELS[0]).toBe(PIXEL_ZOOM_MIN);
+    expect(PRIVATE_ZOOM_LEVELS[PRIVATE_ZOOM_LEVELS.length - 1]).toBe(PRIVATE_ZOOM_MAX);
+  });
+
+  it("fitZoom scales a small 32x32 document up to fill the available workspace, within Private's zoom range", () => {
+    const zoom = fitZoom(640, 640, 32, 32, 0, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX);
+    expect(zoom).toBe(20); // 640 / 32, comfortably inside [0.1, 32]
+  });
+
+  it("fitZoom clamps to each scope's own maximum when the workspace is large relative to a small document", () => {
+    expect(fitZoom(4000, 4000, 32, 32, 0, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX)).toBe(PRIVATE_ZOOM_MAX);
+    expect(fitZoom(4000, 4000, 32, 32, 0, PIXEL_ZOOM_MIN, PUBLIC_ZOOM_MAX)).toBe(PUBLIC_ZOOM_MAX);
   });
 
   it("fitZoom for the Public 2048x1152 document behaves like a normal large-canvas fit", () => {
-    const zoom = fitZoom(4096, 2304, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT, 0, PIXEL_MIN_ZOOM, PIXEL_MAX_ZOOM);
+    const zoom = fitZoom(4096, 2304, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT, 0, PIXEL_ZOOM_MIN, PUBLIC_ZOOM_MAX);
     expect(zoom).toBe(2); // the limiting axis is width: 4096/2048 = 2, height 2304/1152 = 2 too
   });
 
-  it("clampZoom and stepZoom work unchanged with the pixel range/levels", () => {
-    expect(clampZoom(100, PIXEL_MIN_ZOOM, PIXEL_MAX_ZOOM)).toBe(PIXEL_MAX_ZOOM);
-    expect(clampZoom(0, PIXEL_MIN_ZOOM, PIXEL_MAX_ZOOM)).toBe(PIXEL_MIN_ZOOM);
-    expect(stepZoom(1, PIXEL_ZOOM_LEVELS, 1)).toBe(2);
-    expect(stepZoom(32, PIXEL_ZOOM_LEVELS, 1)).toBe(32); // already at the top
+  it("fitZoom genuinely lands BELOW 100% for a document larger than the viewport -- no minimum clamp forces it back up to 1", () => {
+    // Public's own 2048-wide document in a viewport only 1024 CSS px wide:
+    // the honest fit is 50%, and PIXEL_ZOOM_MIN (0.1) must not interfere.
+    const zoom = fitZoom(1024, 576, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT, 0, PIXEL_ZOOM_MIN, PUBLIC_ZOOM_MAX);
+    expect(zoom).toBeLessThan(1);
+    expect(zoom).toBeCloseTo(0.5);
+  });
+
+  it("clampZoom and stepZoom work unchanged with each scope's own range/levels", () => {
+    expect(clampZoom(100, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX)).toBe(PRIVATE_ZOOM_MAX);
+    expect(clampZoom(0, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX)).toBe(PIXEL_ZOOM_MIN);
+    expect(stepZoom(1, PRIVATE_ZOOM_LEVELS, 1)).toBe(1.5);
+    expect(stepZoom(32, PRIVATE_ZOOM_LEVELS, 1)).toBe(32); // already at the top
+    expect(stepZoom(1, PUBLIC_ZOOM_LEVELS, -1)).toBe(0.5);
+  });
+});
+
+// --- Continuous zoom slider: a logarithmic position <-> zoom mapping -------
+
+describe("zoomToSliderPosition / sliderPositionToZoom", () => {
+  it("the minimum and maximum zoom map to slider positions 0 and 1 exactly", () => {
+    expect(zoomToSliderPosition(PIXEL_ZOOM_MIN, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX)).toBe(0);
+    expect(zoomToSliderPosition(PRIVATE_ZOOM_MAX, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX)).toBe(1);
+  });
+
+  it("the inverse mapping round-trips the endpoints and the midpoint", () => {
+    expect(sliderPositionToZoom(0, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX)).toBeCloseTo(PIXEL_ZOOM_MIN);
+    expect(sliderPositionToZoom(1, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX)).toBeCloseTo(PRIVATE_ZOOM_MAX);
+    const midZoom = sliderPositionToZoom(0.5, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX);
+    expect(zoomToSliderPosition(midZoom, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX)).toBeCloseTo(0.5);
+  });
+
+  it("is logarithmic, not linear: equal slider steps correspond to equal zoom RATIOS, not equal differences", () => {
+    // Over [0.1, 32] (a 320x range split log-evenly), the midpoint position
+    // must be the geometric mean (~1.789), nowhere near the arithmetic
+    // midpoint (~16.05) a linear mapping would give.
+    const midZoom = sliderPositionToZoom(0.5, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX);
+    expect(midZoom).toBeCloseTo(Math.sqrt(PIXEL_ZOOM_MIN * PRIVATE_ZOOM_MAX), 5);
+    expect(midZoom).toBeLessThan(10); // far below the linear midpoint, proving this isn't linear
+  });
+
+  it("is monotonically increasing: a larger slider position never produces a smaller zoom", () => {
+    let previous = -Infinity;
+    for (let position = 0; position <= 1; position += 0.1) {
+      const z = sliderPositionToZoom(position, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX);
+      expect(z).toBeGreaterThan(previous);
+      previous = z;
+    }
+  });
+
+  it("clamps an out-of-range zoom value or slider position rather than extrapolating", () => {
+    expect(zoomToSliderPosition(0.01, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX)).toBe(0);
+    expect(zoomToSliderPosition(999, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX)).toBe(1);
+    expect(sliderPositionToZoom(-5, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX)).toBeCloseTo(PIXEL_ZOOM_MIN);
+    expect(sliderPositionToZoom(5, PIXEL_ZOOM_MIN, PRIVATE_ZOOM_MAX)).toBeCloseTo(PRIVATE_ZOOM_MAX);
+  });
+
+  it("works identically for Public's own (narrower) range", () => {
+    expect(zoomToSliderPosition(PUBLIC_ZOOM_MAX, PIXEL_ZOOM_MIN, PUBLIC_ZOOM_MAX)).toBe(1);
+    expect(sliderPositionToZoom(1, PIXEL_ZOOM_MIN, PUBLIC_ZOOM_MAX)).toBeCloseTo(PUBLIC_ZOOM_MAX);
   });
 });
 

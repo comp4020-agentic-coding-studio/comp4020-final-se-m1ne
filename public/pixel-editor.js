@@ -36,9 +36,13 @@ import {
   PUBLIC_MAX_BRUSH_SIZE,
   PRIVATE_MAX_BRUSH_SIZE,
   DEFAULT_BRUSH_SIZE,
-  PIXEL_MIN_ZOOM,
-  PIXEL_MAX_ZOOM,
-  PIXEL_ZOOM_LEVELS,
+  PIXEL_ZOOM_MIN,
+  PUBLIC_ZOOM_MAX,
+  PRIVATE_ZOOM_MAX,
+  PUBLIC_ZOOM_LEVELS,
+  PRIVATE_ZOOM_LEVELS,
+  zoomToSliderPosition,
+  sliderPositionToZoom,
   resolveEditorMode,
   cellFromClientPoint,
   buildRenderOps,
@@ -85,6 +89,7 @@ const themeToggle = document.getElementById("theme-toggle");
 const statusDocSize = document.getElementById("status-doc-size");
 const zoomOutButton = document.getElementById("zoom-out-button");
 const zoomInButton = document.getElementById("zoom-in-button");
+const zoomSlider = document.getElementById("zoom-slider");
 const zoomPercentDisplay = document.getElementById("zoom-percent");
 const fitButton = document.getElementById("fit-button");
 const gridOverlay = document.getElementById("pixel-grid-overlay");
@@ -94,11 +99,14 @@ const leaveRoomCancelButton = document.getElementById("leave-room-cancel");
 const leaveRoomConfirmButton = document.getElementById("leave-room-confirm");
 const backToPublicLink = document.getElementById("back-to-public");
 const workspace = document.getElementById("workspace");
-const toolGroup = document.getElementById("tool-group");
 const sizeGroup = document.getElementById("size-group");
-const studioToolRail = document.getElementById("studio-tool-rail");
-const studioPanel = document.getElementById("studio-panel");
-const studioDocumentControls = document.getElementById("studio-document-controls");
+const studioSideRail = document.getElementById("studio-side-rail");
+const sideRailBrushSize = document.getElementById("side-rail-brush-size");
+const documentSettingsButton = document.getElementById("document-settings-button");
+const documentSettingsPopover = document.getElementById("document-settings-popover");
+const documentSettingsClose = document.getElementById("document-settings-close");
+const documentSettingsBody = document.getElementById("document-settings-body");
+const documentDimensions = document.getElementById("document-dimensions");
 
 // Theme is a local UI preference only -- never sent to the server, never part
 // of collaborative state. Identical in spirit to public/app.js's own theme
@@ -145,6 +153,8 @@ async function main() {
 function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   const isPublicPixelWall = roomCode === null;
   const maxBrushSize = isPublicPixelWall ? PUBLIC_MAX_BRUSH_SIZE : PRIVATE_MAX_BRUSH_SIZE;
+  const zoomMax = isPublicPixelWall ? PUBLIC_ZOOM_MAX : PRIVATE_ZOOM_MAX;
+  const zoomLevels = isPublicPixelWall ? PUBLIC_ZOOM_LEVELS : PRIVATE_ZOOM_LEVELS;
   const opsUrl = isPublicPixelWall ? "/api/pixels" : `/api/rooms/${roomCode}/pixels`;
   const drawUrl = `${opsUrl}/draw`;
   const eraseUrl = `${opsUrl}/erase`;
@@ -207,7 +217,7 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   // client-side, reset on load and the instant any of this owner's own ops
   // actually persists (their redo branch was just abandoned server-side).
   let myRedoCount = 0;
-  let zoom = PIXEL_MIN_ZOOM;
+  let zoom = PIXEL_ZOOM_MIN;
 
   // --- Rendering -------------------------------------------------------------
   // A full replay of the entire op history (public/pixelgrid.js's
@@ -644,13 +654,21 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   // --- Zoom / Fit / grid overlay --------------------------------------------
   // Reuses public/viewport.js's clampZoom/fitZoom/stepZoom completely
   // unchanged -- every one of them already takes min/max/levels as
-  // parameters -- with pixeldoc.js's own PIXEL_MIN_ZOOM/MAX_ZOOM/LEVELS,
-  // sized for magnifying a small logical grid rather than a 1920x1080
-  // freehand canvas. Zoom still only ever changes canvas.style.width/height,
-  // never canvas.width/height, so it never clears or replays a single pixel
-  // of artwork.
+  // parameters -- with pixeldoc.js's own scope-specific PIXEL_ZOOM_MIN/
+  // zoomMax/zoomLevels (10%-800% Public, 10%-3200% Private), sized for
+  // magnifying a small logical grid rather than a 1920x1080 freehand canvas.
+  // Zoom still only ever changes canvas.style.width/height, never
+  // canvas.width/height, so it never clears or replays a single pixel of
+  // artwork. #zoom-slider is a continuous control over the same range,
+  // logarithmically mapped (pixeldoc.js's zoomToSliderPosition/
+  // sliderPositionToZoom) since a linear slider would waste almost all of
+  // its travel above 100% on a 320x range -- it, the +/- buttons, the
+  // percentage readout, Fit, and ctrl/cmd+wheel all funnel through this one
+  // applyZoom, so there is exactly one zoom state, never a second one to
+  // drift out of sync.
   const FIT_MARGIN_PX = 24;
   const GRID_OVERLAY_MIN_ZOOM = 8; // below this, individual cells are too small for a grid to help rather than add noise
+  const ZOOM_SLIDER_RESOLUTION = Number(zoomSlider.max) || 1000;
 
   function updateGridOverlay() {
     if (zoom < GRID_OVERLAY_MIN_ZOOM) {
@@ -665,24 +683,61 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     gridOverlay.style.backgroundSize = `${zoom}px ${zoom}px`;
   }
 
-  function applyZoom(nextZoom) {
-    zoom = clampZoom(nextZoom, PIXEL_MIN_ZOOM, PIXEL_MAX_ZOOM);
+  // Keeps whatever document point is currently under (anchorClientX,
+  // anchorClientY) -- the viewport's own centre by default, or the pointer
+  // for wheel-zoom -- visually fixed across the zoom change, by reading the
+  // canvas's actual rendered box (getBoundingClientRect already reflects
+  // #canvas-viewport's own centring-when-it-fits/scroll-when-it-doesn't
+  // layout, so this needs no special case for either) before and after
+  // resizing, and adjusting scroll by exactly the difference. This is what
+  // stops the canvas from jumping to some other part of the document on
+  // every zoom change.
+  function applyZoom(nextZoom, anchorClientX, anchorClientY) {
+    const previousZoom = zoom;
+    const viewportRect = canvasViewport.getBoundingClientRect();
+    const targetClientX = anchorClientX ?? viewportRect.left + viewportRect.width / 2;
+    const targetClientY = anchorClientY ?? viewportRect.top + viewportRect.height / 2;
+    const rectBefore = canvas.getBoundingClientRect();
+    const docX = (targetClientX - rectBefore.left) / previousZoom;
+    const docY = (targetClientY - rectBefore.top) / previousZoom;
+
+    zoom = clampZoom(nextZoom, PIXEL_ZOOM_MIN, zoomMax);
     canvas.style.width = `${gridWidth * zoom}px`;
     canvas.style.height = `${gridHeight * zoom}px`;
     zoomPercentDisplay.textContent = `${Math.round(zoom * 100)}%`;
+    zoomSlider.value = String(Math.round(zoomToSliderPosition(zoom, PIXEL_ZOOM_MIN, zoomMax) * ZOOM_SLIDER_RESOLUTION));
+
+    const rectAfter = canvas.getBoundingClientRect();
+    canvasViewport.scrollLeft += rectAfter.left + docX * zoom - targetClientX;
+    canvasViewport.scrollTop += rectAfter.top + docY * zoom - targetClientY;
+
     updateCursorSize();
     updateGridOverlay();
   }
 
   function applyFit() {
-    applyZoom(
-      fitZoom(canvasViewport.clientWidth, canvasViewport.clientHeight, gridWidth, gridHeight, FIT_MARGIN_PX, PIXEL_MIN_ZOOM, PIXEL_MAX_ZOOM),
-    );
+    applyZoom(fitZoom(canvasViewport.clientWidth, canvasViewport.clientHeight, gridWidth, gridHeight, FIT_MARGIN_PX, PIXEL_ZOOM_MIN, zoomMax));
   }
 
-  zoomInButton.addEventListener("click", () => applyZoom(stepZoom(zoom, PIXEL_ZOOM_LEVELS, 1)));
-  zoomOutButton.addEventListener("click", () => applyZoom(stepZoom(zoom, PIXEL_ZOOM_LEVELS, -1)));
+  zoomInButton.addEventListener("click", () => applyZoom(stepZoom(zoom, zoomLevels, 1)));
+  zoomOutButton.addEventListener("click", () => applyZoom(stepZoom(zoom, zoomLevels, -1)));
   fitButton.addEventListener("click", applyFit);
+  zoomSlider.addEventListener("input", () => {
+    applyZoom(sliderPositionToZoom(Number(zoomSlider.value) / ZOOM_SLIDER_RESOLUTION, PIXEL_ZOOM_MIN, zoomMax));
+  });
+  // ctrl/cmd+wheel only -- a plain wheel/trackpad scroll keeps doing native
+  // #canvas-viewport panning (overflow: auto), untouched. preventDefault
+  // (needing { passive: false }) stops the browser's own page-zoom gesture
+  // from also firing for the same ctrl+wheel/pinch input.
+  canvasViewport.addEventListener(
+    "wheel",
+    (event) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      event.preventDefault();
+      applyZoom(zoom * Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY);
+    },
+    { passive: false },
+  );
 
   // --- Private Room presence / invite-code joining --------------------------
   // Identical lifecycle to public/app.js's own (duplicated rather than
@@ -813,27 +868,59 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     publicRoomControls.hidden = true;
     privateRoomControls.hidden = false;
 
-    // The Pixquare-inspired studio layout, for every Private pixel-art
-    // room: relocates the EXISTING #tool-group (into the left rail) and
-    // #size-group/#colour-group (into the right panel) -- appendChild MOVES
-    // a node, so each keeps its own id, internal markup, and every listener
-    // already wired to it (the ones further down in this file, and
-    // public/colour-picker-ui.js's own). Nothing here is a second copy of
-    // any control. #private-room-controls' own children (room code,
-    // background control, leave link) are relocated the same way into the
-    // panel's Document section; the now-empty session-bar container is
-    // hidden rather than left as a visible blank space.
+    // The Procreate/Pixquare-inspired studio layout, for every Private
+    // pixel-art room. Primary tools/colours stay in the existing compact
+    // top #tool-ribbon (styles.css's .studio-layout rules just slim it
+    // down); only the brush-size slider and its direct numeric input --
+    // #size-group's own `.size-control` wrapper div, moved whole via
+    // appendChild (which MOVES a node, keeping its id, markup, and every
+    // already-wired listener) -- relocate to the canvas's own left edge
+    // (#studio-side-rail), next to the reserved, genuinely-disabled Opacity
+    // slot already in the markup. #size-group itself is left behind empty
+    // (its "Size" label has no content to label in a slim top toolbar), so
+    // it's hidden rather than shown as a stray empty group. Nothing here is
+    // a second copy of any control.
     workspace.classList.add("studio-layout");
-    studioToolRail.hidden = false;
-    studioToolRail.appendChild(toolGroup);
-    studioPanel.hidden = false;
-    studioPanel.appendChild(sizeGroup);
-    studioPanel.appendChild(colourGroup);
-    studioDocumentControls.appendChild(roomCodeLabel);
-    studioDocumentControls.appendChild(roomBackgroundControl);
-    studioDocumentControls.appendChild(roomBackgroundColourInput);
-    studioDocumentControls.appendChild(backToPublicLink);
-    privateRoomControls.hidden = true;
+    studioSideRail.hidden = false;
+    sideRailBrushSize.appendChild(sizeGroup.querySelector(".size-control"));
+    sizeGroup.hidden = true;
+
+    // Room code, background control, and Leave relocate the same way into
+    // #document-settings-popover, reached through the compact
+    // #document-settings-button that replaces them in the session bar --
+    // not a full-width persistent row. #private-room-controls itself stays
+    // visible (it now contains only that button).
+    documentSettingsButton.hidden = false;
+    documentSettingsBody.appendChild(roomCodeLabel);
+    documentSettingsBody.appendChild(roomBackgroundControl);
+    documentSettingsBody.appendChild(roomBackgroundColourInput);
+    documentSettingsBody.appendChild(backToPublicLink);
+
+    function openDocumentSettingsPopover() {
+      const rect = documentSettingsButton.getBoundingClientRect();
+      const popoverWidth = 240;
+      documentSettingsPopover.style.top = `${rect.bottom + 6}px`;
+      documentSettingsPopover.style.left = `${Math.min(rect.left, window.innerWidth - popoverWidth - 8)}px`;
+      documentSettingsPopover.hidden = false;
+      documentSettingsButton.setAttribute("aria-expanded", "true");
+    }
+    function closeDocumentSettingsPopover() {
+      documentSettingsPopover.hidden = true;
+      documentSettingsButton.setAttribute("aria-expanded", "false");
+    }
+    documentSettingsButton.addEventListener("click", () => {
+      if (documentSettingsPopover.hidden) openDocumentSettingsPopover();
+      else closeDocumentSettingsPopover();
+    });
+    documentSettingsClose.addEventListener("click", closeDocumentSettingsPopover);
+    document.addEventListener("pointerdown", (event) => {
+      if (documentSettingsPopover.hidden) return;
+      if (documentSettingsPopover.contains(event.target) || documentSettingsButton.contains(event.target)) return;
+      closeDocumentSettingsPopover();
+    });
+    window.addEventListener("keydown", (event) => {
+      if (!documentSettingsPopover.hidden && event.key === "Escape") closeDocumentSettingsPopover();
+    });
 
     // Read-only document information -- this room's dimensions are fixed
     // forever at creation, so they are shown here (and in the status bar's
@@ -841,7 +928,8 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     // room. Background, unlike dimensions, CAN be changed after creation --
     // see changeBackground below, which never touches dimensions, drawing
     // content, or pixel ownership.
-    roomCodeLabel.textContent = `Room: ${roomCode} (${gridWidth} × ${gridHeight})`;
+    roomCodeLabel.textContent = `Room: ${roomCode}`;
+    documentDimensions.textContent = `${gridWidth} × ${gridHeight}`;
 
     roomBackgroundSelect.value = background.kind;
     roomBackgroundColourInput.hidden = background.kind !== "custom";

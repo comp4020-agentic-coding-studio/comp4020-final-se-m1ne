@@ -81,13 +81,13 @@
               <a href="/archive.html" class="app-button">Archive</a>
             </div>
             <div id="private-room-controls" class="session-group" hidden>
+              <!-- public/app.js (legacy rooms, untouched) shows these three
+                   directly, exactly as it always has. public/pixel-editor.js
+                   (a pixel-art room) instead relocates all three into
+                   #document-settings-popover and reveals the compact button
+                   below in their place -- appendChild MOVES a node, so app.js
+                   keeps working unmodified and nothing here is duplicated. -->
               <span id="room-code-label"></span>
-              <!-- Background can be changed after creation (dimensions
-                   cannot); only read/wired by public/pixel-editor.js, never
-                   shown for a legacy freehand room. A placeholder location
-                   for now -- the Pixquare-inspired studio layout relocates
-                   this into its own document panel without re-implementing
-                   it. -->
               <label id="room-background-control" for="room-background-select">
                 Background
                 <select id="room-background-select">
@@ -98,6 +98,21 @@
               </label>
               <input type="color" id="room-background-colour-input" value="#ffffff" hidden />
               <a href="/" id="back-to-public" class="app-button">Back to Public Canvas</a>
+              <!-- Pixel-room-only, compact alternative to the row above:
+                   opens #document-settings-popover instead of showing room
+                   code/background/leave inline. Stays hidden for a legacy
+                   room -- public/app.js never shows or touches it. -->
+              <button
+                type="button"
+                id="document-settings-button"
+                class="app-button"
+                hidden
+                aria-haspopup="dialog"
+                aria-expanded="false"
+                aria-controls="document-settings-popover"
+              >
+                Document
+              </button>
             </div>
           </div>
         </div>
@@ -190,35 +205,51 @@
         </div>
       </div>
 
-      <!-- The Pixquare-inspired Private studio layout: a left tool rail and a
-           right document/options panel, both empty here and populated only
-           by public/pixel-editor.js relocating the EXISTING #tool-group/
-           #size-group/#colour-group elements into them (appendChild moves a
-           node, preserving its id and every listener already wired to it --
-           nothing is duplicated or re-implemented) -- and only for a Private
-           pixel-art room; Public and every legacy page leave these hidden
-           and #tool-ribbon exactly where it already is. See styles.css's
-           .studio-layout rules for the actual grid/flex repositioning. -->
-      <div id="studio-tool-rail" hidden></div>
+      <!-- #studio-workspace-row is `display: contents` by default (see
+           styles.css) -- invisible to layout, so #canvas-viewport behaves
+           exactly as before for Public/legacy. Only a Private pixel-art room
+           turns it into a flex row (#studio-side-rail beside the canvas),
+           Procreate-style: compact vertical controls at the canvas's own
+           edge, not a page-height sidebar. #studio-side-rail starts empty;
+           public/pixel-editor.js relocates the EXISTING #size-group's slider
+           and number input into its Brush slot (appendChild moves the real
+           node, keeping its id and every listener) and reveals the Opacity
+           slot (its own disabled, non-functional placeholder -- see Opacity's
+           own comment below). Public and every legacy page leave both hidden. -->
+      <div id="studio-workspace-row">
+        <div id="studio-side-rail" hidden>
+          <div class="side-rail-control" id="side-rail-brush-size">
+            <span class="side-rail-label">Size</span>
+            <!-- #size-group's #tool-size-slider/#tool-size-number land here -->
+          </div>
+          <div class="side-rail-control" id="side-rail-opacity">
+            <span class="side-rail-label">Opacity</span>
+            <!-- Deliberately disabled, not wired to anything: reserves the
+                 layout position a real opacity control will occupy once
+                 pixel ops actually carry an opacity value, without
+                 pretending this slider does something it doesn't yet. -->
+            <input
+              type="range"
+              id="tool-opacity-slider"
+              min="0"
+              max="100"
+              value="100"
+              step="1"
+              disabled
+              aria-label="Opacity (not yet available)"
+            />
+            <output id="tool-opacity-value">100%</output>
+          </div>
+        </div>
 
-      <div id="canvas-viewport">
-        <canvas id="canvas"></canvas>
-        <!-- Pure CSS/DOM overlay, positioned in JS by public/pixel-editor.js
-             to track the canvas's own CSS box at the current zoom -- never
-             drawn into #canvas's own 2D context, so it can never contaminate
-             stored artwork. Unused (left hidden) by public/app.js. -->
-        <div id="pixel-grid-overlay" aria-hidden="true" hidden></div>
-      </div>
-
-      <div id="studio-panel" hidden>
-        <!-- Room identity/sharing surfaces first; Brush and Colour (the
-             relocated #size-group/#colour-group) are appended after this by
-             pixel-editor.js. A structural slot for a future Layers panel and
-             other professional tool options sits here too, alongside this
-             one -- intentionally not built out with placeholder content yet. -->
-        <div class="ribbon-group" id="studio-document-section">
-          <span class="group-label">Document</span>
-          <div class="group-controls" id="studio-document-controls"></div>
+        <div id="canvas-viewport">
+          <canvas id="canvas"></canvas>
+          <!-- Pure CSS/DOM overlay, positioned in JS by public/pixel-editor.js
+               to track the canvas's own CSS box at the current zoom -- never
+               drawn into #canvas's own 2D context, so it can never
+               contaminate stored artwork. Unused (left hidden) by
+               public/app.js. -->
+          <div id="pixel-grid-overlay" aria-hidden="true" hidden></div>
         </div>
       </div>
 
@@ -232,6 +263,12 @@
               <line x1="7.2" y1="10.5" x2="13.8" y2="10.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
             </svg>
           </button>
+          <!-- Continuous, logarithmically-mapped zoom (see public/pixeldoc.js's
+               zoomToSliderPosition/sliderPositionToZoom): position 0-1000 maps
+               onto the current scope's own [10%, 800% or 3200%] range. Kept in
+               sync with the buttons/percentage/Fit/wheel-zoom through the one
+               shared applyZoom function -- never a second zoom state. -->
+          <input type="range" id="zoom-slider" min="0" max="1000" step="1" value="0" aria-label="Zoom level" />
           <output id="zoom-percent" for="zoom-out-button zoom-in-button" aria-live="polite">100%</output>
           <button id="zoom-in-button" type="button" class="app-button icon-button" aria-label="Zoom in" title="Zoom in">
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
@@ -331,6 +368,27 @@
         <div id="room-create-popover-actions">
           <button type="button" id="room-create-cancel" class="app-button">Cancel</button>
           <button type="button" id="room-create-confirm" class="app-button">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Document settings: room code, read-only dimensions, the background
+         control, and Leave -- a compact popover (triggered by
+         #document-settings-button in the session bar) instead of a
+         full-width persistent row. public/pixel-editor.js relocates
+         #room-code-label/#room-background-control/#room-background-colour-
+         input/#back-to-public into this body for a pixel-art room; never
+         touched by public/app.js (legacy rooms keep showing them inline,
+         where they already are). -->
+    <div id="document-settings-popover" role="dialog" aria-label="Document settings" hidden>
+      <div id="document-settings-header">
+        <span>Document</span>
+        <button type="button" id="document-settings-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="document-settings-body">
+        <div class="document-settings-row">
+          <span class="group-label">Size</span>
+          <span id="document-dimensions"></span>
         </div>
       </div>
     </div>
