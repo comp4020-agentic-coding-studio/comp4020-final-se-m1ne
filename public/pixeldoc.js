@@ -59,6 +59,16 @@ export function isValidPixelResolution(value) {
   return PIXEL_RESOLUTIONS.includes(value);
 }
 
+// Resolves the resolution to actually send to POST /api/rooms from the
+// create-room popover's selected radio value (a string, or undefined if
+// somehow none is checked) -- falls back to DEFAULT_PIXEL_RESOLUTION rather
+// than sending a missing or invalid value, and never trusts an out-of-range
+// one either, even though the server validates independently regardless.
+export function resolveRoomCreationResolution(rawValue) {
+  const n = Number(rawValue);
+  return isValidPixelResolution(n) ? n : DEFAULT_PIXEL_RESOLUTION;
+}
+
 export function clampBrushSize(size) {
   const n = Math.round(size);
   if (!Number.isFinite(n)) return DEFAULT_BRUSH_SIZE;

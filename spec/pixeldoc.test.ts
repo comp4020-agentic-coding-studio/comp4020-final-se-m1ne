@@ -14,6 +14,7 @@ import {
   PUBLIC_PIXEL_WIDTH,
   removePendingOp,
   resolveEditorMode,
+  resolveRoomCreationResolution,
 } from "../public/pixeldoc.js";
 import { clampZoom, fitZoom, stepZoom } from "../public/viewport.js";
 
@@ -60,6 +61,26 @@ describe("pixel resolution handling", () => {
   it("isValidPixelResolution rejects anything outside the exact four supported sizes", () => {
     for (const bad of [0, 16, 100, 512, -32, 64.5, "64", null, undefined]) {
       expect(isValidPixelResolution(bad as unknown as number)).toBe(false);
+    }
+  });
+});
+
+// --- Room creation: resolving the create-room popover's selected value ------
+
+describe("resolveRoomCreationResolution (the create-room popover's selected radio value -> what POST /api/rooms actually receives)", () => {
+  it("passes through each of the four supported resolutions, given as the radio's own string value", () => {
+    for (const size of PIXEL_RESOLUTIONS) {
+      expect(resolveRoomCreationResolution(String(size))).toBe(size);
+    }
+  });
+
+  it("falls back to the default (128) when nothing is selected (undefined, e.g. document.querySelector found no checked radio)", () => {
+    expect(resolveRoomCreationResolution(undefined)).toBe(DEFAULT_PIXEL_RESOLUTION);
+  });
+
+  it("falls back to the default for any malformed or out-of-range value, never trusting it through unchecked", () => {
+    for (const bad of ["", "0", "100", "abc", null]) {
+      expect(resolveRoomCreationResolution(bad as unknown as string)).toBe(DEFAULT_PIXEL_RESOLUTION);
     }
   });
 });

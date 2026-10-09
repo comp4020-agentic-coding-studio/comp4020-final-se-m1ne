@@ -24,6 +24,7 @@
 
 import { fadeOpacity } from "./fade.js";
 import { hexToRgb, rgbToHex } from "./colour.js";
+import { initColourPicker } from "./colour-picker-ui.js";
 import { compositeOverWhite } from "./sampling.js";
 import { replayPixelOps } from "./pixelgrid.js";
 import { cssPointToNormalized, cursorDiameterCssPx, fitZoom, stepZoom, clampZoom } from "./viewport.js";
@@ -35,6 +36,7 @@ import {
   PIXEL_MAX_ZOOM,
   PIXEL_ZOOM_LEVELS,
   resolveEditorMode,
+  resolveRoomCreationResolution,
   cellFromClientPoint,
   buildRenderOps,
   removePendingOp,
@@ -51,11 +53,11 @@ const toolBrushButton = document.getElementById("tool-brush");
 const toolEraserButton = document.getElementById("tool-eraser");
 const toolEyedropperButton = document.getElementById("tool-eyedropper");
 const colourGroup = document.getElementById("colour-group");
-const colourCurrent = document.getElementById("colour-current");
-const editColourButton = document.getElementById("edit-colour-button");
-const pixelColourInput = document.getElementById("pixel-colour-input");
 const createRoomButton = document.getElementById("create-room-button");
-const roomResolutionSelect = document.getElementById("room-resolution-select");
+const roomCreatePopover = document.getElementById("room-create-popover");
+const roomCreatePopoverClose = document.getElementById("room-create-popover-close");
+const roomCreateCancelButton = document.getElementById("room-create-cancel");
+const roomCreateConfirmButton = document.getElementById("room-create-confirm");
 const joinRoomForm = document.getElementById("join-room-form");
 const joinRoomCodeInput = document.getElementById("join-room-code");
 const publicRoomControls = document.getElementById("public-room-controls");
@@ -337,7 +339,7 @@ function bootPixelEditor(gridWidth, gridHeight) {
   // white background.
   function sampleColourAt(cell) {
     const [r, g, b, a] = ctx.getImageData(cell.x, cell.y, 1, 1).data;
-    setColor(rgbToHex(compositeOverWhite(r, g, b, a)));
+    colourPicker.setColor(rgbToHex(compositeOverWhite(r, g, b, a)));
     setMode("brush");
   }
 
@@ -463,35 +465,16 @@ function bootPixelEditor(gridWidth, gridHeight) {
   });
 
   // --- Colour --------------------------------------------------------------
-  // Deliberately simpler than the freehand engine's hue-wheel/RGB-HSV
-  // popover: the same preset swatch palette, plus a native <input
-  // type="color"> for a custom choice -- entry-level, functional colour
-  // selection without re-implementing ~250 lines of popover wiring for a
-  // feature this step's own scope calls out as secondary to accurate
-  // drawing controls. #edit-colour-button/#colour-popover (the freehand
-  // popover) are simply never shown or wired here.
-  editColourButton.hidden = true;
-  pixelColourInput.hidden = false;
-
-  function setColor(hex) {
-    color = hex;
-    syncColourControls();
-  }
-
-  function syncColourControls() {
-    colourCurrent.style.background = color;
-    pixelColourInput.value = color;
-    const lower = color.toLowerCase();
-    document.querySelectorAll(".swatch[data-color]").forEach((swatch) => {
-      swatch.classList.toggle("selected", swatch.dataset.color.toLowerCase() === lower);
-    });
-  }
-
-  for (const swatch of document.querySelectorAll(".swatch[data-color]")) {
-    swatch.addEventListener("click", () => setColor(swatch.dataset.color));
-  }
-  pixelColourInput.addEventListener("input", () => setColor(pixelColourInput.value));
-  syncColourControls();
+  // The exact same established custom-colour interaction the freehand editor
+  // uses -- preset swatches, the Hue-ring/SV-square wheel, RGB/HSV sliders --
+  // via the shared public/colour-picker-ui.js module, so there is exactly one
+  // colour-selection implementation for both editors, not two.
+  const colourPicker = initColourPicker({
+    initialColor: color,
+    onChange: (hex) => {
+      color = hex;
+    },
+  });
 
   // --- Zoom / Fit / grid overlay --------------------------------------------
   // Reuses public/viewport.js's clampZoom/fitZoom/stepZoom completely
@@ -599,9 +582,43 @@ function bootPixelEditor(gridWidth, gridHeight) {
   }
 
   if (isPublicPixelWall) {
-    createRoomButton.addEventListener("click", async () => {
+    // Resolution is chosen as part of the creation interaction -- a small
+    // popover confirmed before anything is created -- not a permanently-
+    // visible toolbar control, and never editable again once a room exists
+    // (its resolution is fixed forever at creation, server/db.js's own
+    // immutability for width/height).
+    function openRoomCreatePopover() {
+      const rect = createRoomButton.getBoundingClientRect();
+      const popoverWidth = 220;
+      roomCreatePopover.style.top = `${rect.bottom + 6}px`;
+      roomCreatePopover.style.left = `${Math.min(rect.left, window.innerWidth - popoverWidth - 8)}px`;
+      roomCreatePopover.hidden = false;
+      createRoomButton.setAttribute("aria-expanded", "true");
+    }
+    function closeRoomCreatePopover() {
+      roomCreatePopover.hidden = true;
+      createRoomButton.setAttribute("aria-expanded", "false");
+    }
+
+    createRoomButton.addEventListener("click", () => {
+      if (roomCreatePopover.hidden) openRoomCreatePopover();
+      else closeRoomCreatePopover();
+    });
+    roomCreatePopoverClose.addEventListener("click", closeRoomCreatePopover);
+    document.addEventListener("pointerdown", (event) => {
+      if (roomCreatePopover.hidden) return;
+      if (roomCreatePopover.contains(event.target) || createRoomButton.contains(event.target)) return;
+      closeRoomCreatePopover();
+    });
+    window.addEventListener("keydown", (event) => {
+      if (!roomCreatePopover.hidden && event.key === "Escape") closeRoomCreatePopover();
+    });
+
+    roomCreateConfirmButton.addEventListener("click", async () => {
+      const checked = document.querySelector('input[name="room-resolution"]:checked');
+      const resolution = resolveRoomCreationResolution(checked?.value);
+      closeRoomCreatePopover();
       const newPresenceId = crypto.randomUUID();
-      const resolution = Number(roomResolutionSelect.value);
       const res = await fetch("/api/rooms", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -610,6 +627,7 @@ function bootPixelEditor(gridWidth, gridHeight) {
       const { code } = await res.json();
       location.href = `/room/${code}?pid=${encodeURIComponent(newPresenceId)}`;
     });
+
     joinRoomForm.addEventListener("submit", (event) => {
       event.preventDefault();
       const code = joinRoomCodeInput.value.trim().toUpperCase();
@@ -618,7 +636,10 @@ function bootPixelEditor(gridWidth, gridHeight) {
   } else {
     publicRoomControls.hidden = true;
     privateRoomControls.hidden = false;
-    roomCodeLabel.textContent = `Room: ${roomCode}`;
+    // Read-only document information -- this room's resolution is fixed
+    // forever at creation, so it is shown here (and in the status bar's own
+    // statusDocSize, set above), never as an editable control inside a room.
+    roomCodeLabel.textContent = `Room: ${roomCode} (${gridWidth} × ${gridHeight})`;
 
     const pidFromUrl = new URLSearchParams(location.search).get("pid");
     presenceId = pidFromUrl && pidFromUrl.length > 0 ? pidFromUrl : crypto.randomUUID();

@@ -742,10 +742,6 @@ body {
   gap: 8px;
 }
 
-/* --- Responsive foundation ---------------------------------------------------
-   At narrow viewports the ribbon already wraps on its own (flex-wrap above);
-   this block only shrinks the few controls that would otherwise overflow a
-   ~390px width, and turns the popover into a bottom-anchored overlay sheet. */
 /* --- Pixel-art mode additions (Step 5) --------------------------------------
    Applied only by public/pixel-editor.js (public/app.js never adds these
    classes or unhides these elements, so the untouched legacy editor is
@@ -787,30 +783,81 @@ body {
   display: none;
 }
 
-#room-resolution-select {
-  padding: 4px 8px;
-  border: 1px solid var(--input-border);
-  border-radius: 4px;
-  background: var(--input-bg);
+/* The Private Room creation popover: identical chrome to #colour-popover
+   (same tokens, same header/body shape) rather than inventing a second
+   popover style -- a resolution choice confirmed before creation, not a
+   permanently-visible toolbar control. */
+#room-create-popover {
+  position: fixed;
+  z-index: 30;
+  width: 220px;
+  background: var(--popover-bg);
+  border: 1px solid var(--popover-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--popover-shadow);
+  padding: 10px;
+  font-size: 0.8rem;
   color: var(--text-primary);
-  font-size: 0.85rem;
-  font-family: inherit;
 }
 
-#pixel-colour-input {
-  width: 32px;
-  height: 28px;
-  padding: 1px;
-  border: 1px solid var(--input-border);
-  border-radius: 4px;
-  background: var(--control-bg);
-  cursor: pointer;
-}
-
-#pixel-colour-input[hidden] {
+#room-create-popover[hidden] {
   display: none;
 }
 
+#room-create-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--divider);
+}
+
+#room-create-popover-close {
+  border: none;
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+#room-create-popover-close:hover {
+  background: var(--control-hover-bg);
+}
+
+#room-create-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#room-resolution-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#room-resolution-options label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+#room-create-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* --- Responsive foundation ---------------------------------------------------
+   At narrow viewports the ribbon already wraps on its own (flex-wrap above);
+   this block only shrinks the few controls that would otherwise overflow a
+   ~390px width, and turns the popover into a bottom-anchored overlay sheet. */
 @media (max-width: 600px) {
   #session-bar {
     flex-wrap: wrap;

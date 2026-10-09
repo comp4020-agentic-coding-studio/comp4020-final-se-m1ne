@@ -59,15 +59,17 @@
             <div id="public-room-controls" class="session-group">
               <!-- Only read/wired by public/pixel-editor.js -- the Public
                    page is always pixel mode now, so public/app.js's own
-                   (untouched) "Create private room" handler never runs this
-                   select exists either way without affecting it. -->
-              <select id="room-resolution-select" aria-label="New private room resolution">
-                <option value="32">32 × 32</option>
-                <option value="64">64 × 64</option>
-                <option value="128" selected>128 × 128</option>
-                <option value="256">256 × 256</option>
-              </select>
-              <button id="create-room-button" type="button" class="app-button">Create private room</button>
+                   (untouched) "Create private room" handler never runs. -->
+              <button
+                id="create-room-button"
+                type="button"
+                class="app-button"
+                aria-haspopup="dialog"
+                aria-expanded="false"
+                aria-controls="room-create-popover"
+              >
+                Create private room
+              </button>
               <form id="join-room-form" class="join-control">
                 <input id="join-room-code" type="text" maxlength="6" placeholder="Room code" aria-label="Room code" />
                 <button type="submit" class="app-button">Join</button>
@@ -155,12 +157,6 @@
             >
               Edit colour
             </button>
-            <!-- Pixel mode's own, deliberately simpler custom-colour control
-                 (public/pixel-editor.js): a native colour input instead of
-                 the freehand hue-wheel popover below, which pixel mode never
-                 opens. Hidden by default; public/app.js never shows or reads
-                 this element, so the legacy editor is unaffected either way. -->
-            <input type="color" id="pixel-colour-input" aria-label="Custom colour" value="#1d1d1d" hidden />
           </div>
         </div>
       </div>
@@ -242,6 +238,32 @@
             <input type="range" id="hsv-v-slider" min="0" max="100" step="1" />
             <input type="number" id="hsv-v-number" min="0" max="100" step="1" />
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- The Private Room creation flow: choose a resolution before
+         confirming, instead of a permanently-visible toolbar control. Same
+         popover chrome as #colour-popover (shared tokens, same structure),
+         wired only by public/pixel-editor.js (the Public page is always
+         pixel mode, so this is the only place a NEW pixel-art room is ever
+         created; public/app.js never opens it). -->
+    <div id="room-create-popover" role="dialog" aria-label="Create private room" hidden>
+      <div id="room-create-popover-header">
+        <span>Create private room</span>
+        <button type="button" id="room-create-popover-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="room-create-popover-body">
+        <span class="group-label">Resolution</span>
+        <div id="room-resolution-options" role="radiogroup" aria-label="Resolution">
+          <label><input type="radio" name="room-resolution" value="32" /> 32 × 32</label>
+          <label><input type="radio" name="room-resolution" value="64" /> 64 × 64</label>
+          <label><input type="radio" name="room-resolution" value="128" checked /> 128 × 128</label>
+          <label><input type="radio" name="room-resolution" value="256" /> 256 × 256</label>
+        </div>
+        <div id="room-create-popover-actions">
+          <button type="button" id="room-create-cancel" class="app-button">Cancel</button>
+          <button type="button" id="room-create-confirm" class="app-button">Create</button>
         </div>
       </div>
     </div>
