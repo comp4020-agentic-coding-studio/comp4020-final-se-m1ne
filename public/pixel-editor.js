@@ -76,6 +76,7 @@ const joinRoomCodeInput = document.getElementById("join-room-code");
 const publicRoomControls = document.getElementById("public-room-controls");
 const privateRoomControls = document.getElementById("private-room-controls");
 const roomCodeLabel = document.getElementById("room-code-label");
+const roomBackgroundControl = document.getElementById("room-background-control");
 const roomBackgroundSelect = document.getElementById("room-background-select");
 const roomBackgroundColourInput = document.getElementById("room-background-colour-input");
 const undoButton = document.getElementById("undo-button");
@@ -92,6 +93,12 @@ const leaveRoomMessage = document.getElementById("leave-room-message");
 const leaveRoomCancelButton = document.getElementById("leave-room-cancel");
 const leaveRoomConfirmButton = document.getElementById("leave-room-confirm");
 const backToPublicLink = document.getElementById("back-to-public");
+const workspace = document.getElementById("workspace");
+const toolGroup = document.getElementById("tool-group");
+const sizeGroup = document.getElementById("size-group");
+const studioToolRail = document.getElementById("studio-tool-rail");
+const studioPanel = document.getElementById("studio-panel");
+const studioDocumentControls = document.getElementById("studio-document-controls");
 
 // Theme is a local UI preference only -- never sent to the server, never part
 // of collaborative state. Identical in spirit to public/app.js's own theme
@@ -805,6 +812,29 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   } else {
     publicRoomControls.hidden = true;
     privateRoomControls.hidden = false;
+
+    // The Pixquare-inspired studio layout, for every Private pixel-art
+    // room: relocates the EXISTING #tool-group (into the left rail) and
+    // #size-group/#colour-group (into the right panel) -- appendChild MOVES
+    // a node, so each keeps its own id, internal markup, and every listener
+    // already wired to it (the ones further down in this file, and
+    // public/colour-picker-ui.js's own). Nothing here is a second copy of
+    // any control. #private-room-controls' own children (room code,
+    // background control, leave link) are relocated the same way into the
+    // panel's Document section; the now-empty session-bar container is
+    // hidden rather than left as a visible blank space.
+    workspace.classList.add("studio-layout");
+    studioToolRail.hidden = false;
+    studioToolRail.appendChild(toolGroup);
+    studioPanel.hidden = false;
+    studioPanel.appendChild(sizeGroup);
+    studioPanel.appendChild(colourGroup);
+    studioDocumentControls.appendChild(roomCodeLabel);
+    studioDocumentControls.appendChild(roomBackgroundControl);
+    studioDocumentControls.appendChild(roomBackgroundColourInput);
+    studioDocumentControls.appendChild(backToPublicLink);
+    privateRoomControls.hidden = true;
+
     // Read-only document information -- this room's dimensions are fixed
     // forever at creation, so they are shown here (and in the status bar's
     // own statusDocSize, set above), never as an editable control inside a

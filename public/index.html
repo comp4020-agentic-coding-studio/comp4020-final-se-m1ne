@@ -190,6 +190,17 @@
         </div>
       </div>
 
+      <!-- The Pixquare-inspired Private studio layout: a left tool rail and a
+           right document/options panel, both empty here and populated only
+           by public/pixel-editor.js relocating the EXISTING #tool-group/
+           #size-group/#colour-group elements into them (appendChild moves a
+           node, preserving its id and every listener already wired to it --
+           nothing is duplicated or re-implemented) -- and only for a Private
+           pixel-art room; Public and every legacy page leave these hidden
+           and #tool-ribbon exactly where it already is. See styles.css's
+           .studio-layout rules for the actual grid/flex repositioning. -->
+      <div id="studio-tool-rail" hidden></div>
+
       <div id="canvas-viewport">
         <canvas id="canvas"></canvas>
         <!-- Pure CSS/DOM overlay, positioned in JS by public/pixel-editor.js
@@ -197,6 +208,18 @@
              drawn into #canvas's own 2D context, so it can never contaminate
              stored artwork. Unused (left hidden) by public/app.js. -->
         <div id="pixel-grid-overlay" aria-hidden="true" hidden></div>
+      </div>
+
+      <div id="studio-panel" hidden>
+        <!-- Room identity/sharing surfaces first; Brush and Colour (the
+             relocated #size-group/#colour-group) are appended after this by
+             pixel-editor.js. A structural slot for a future Layers panel and
+             other professional tool options sits here too, alongside this
+             one -- intentionally not built out with placeholder content yet. -->
+        <div class="ribbon-group" id="studio-document-section">
+          <span class="group-label">Document</span>
+          <div class="group-controls" id="studio-document-controls"></div>
+        </div>
       </div>
 
       <div id="status-bar">

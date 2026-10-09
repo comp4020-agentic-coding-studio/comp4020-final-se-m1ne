@@ -943,6 +943,150 @@ body {
   gap: 8px;
 }
 
+/* --- Pixquare-inspired Private studio layout ---------------------------------
+   Applied only when public/pixel-editor.js adds .studio-layout to #workspace
+   (a Private pixel-art room; never Public, never a legacy freehand page). A
+   left icon tool rail, a right document/options panel, the canvas filling
+   whatever's left -- replacing the C8 horizontal drawing ribbon's layout for
+   this one mode, without touching a single control's own markup, ids, or
+   event wiring: #tool-group/#size-group/#colour-group are the exact same
+   elements app.js and Public pixel mode already use, simply relocated by JS
+   into #studio-tool-rail/#studio-panel (both already present in the DOM,
+   just empty and hidden outside studio mode) and restyled here by context.
+   The structure leaves an obvious place for a future Layers panel (another
+   .ribbon-group-shaped section inside #studio-panel) without this step
+   building one out. */
+.studio-layout #workspace {
+  display: grid;
+  grid-template-columns: 52px 1fr 260px;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "session session session"
+    "rail canvas panel"
+    "status status status";
+  height: 100%;
+}
+
+.studio-layout #session-bar {
+  grid-area: session;
+}
+
+.studio-layout #canvas-viewport {
+  grid-area: canvas;
+}
+
+.studio-layout #status-bar {
+  grid-area: status;
+}
+
+.studio-layout #tool-ribbon {
+  display: none; /* its children have been relocated into the rail/panel below */
+}
+
+.studio-layout #studio-tool-rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 4px;
+  background: var(--ribbon-bg);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+/* The relocated #tool-group, inside the rail: its own "Tools" label is
+   redundant in a dedicated rail (the rail IS the tools), and its buttons
+   stack vertically here instead of the horizontal ribbon row. */
+.studio-layout #studio-tool-rail .ribbon-group {
+  padding: 0;
+  border-left: none;
+}
+
+.studio-layout #studio-tool-rail .group-label {
+  display: none;
+}
+
+.studio-layout #studio-tool-rail .group-controls {
+  flex-direction: column;
+  gap: 4px;
+}
+
+.studio-layout #studio-panel {
+  grid-area: panel;
+  display: flex;
+  flex-direction: column;
+  background: var(--ribbon-bg);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+/* The relocated #size-group/#colour-group read as panel sections here,
+   stacked and full-width, instead of ribbon groups in a horizontal row --
+   same elements, same ids, same listeners, only the surrounding layout
+   context (and this block's own presentation) differs. */
+.studio-layout #studio-panel .ribbon-group {
+  display: block;
+  padding: 12px 14px;
+  border-left: none;
+  border-bottom: 1px solid var(--divider);
+}
+
+.studio-layout #studio-panel .group-controls {
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+#studio-document-controls {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+/* At narrow widths a fixed three-column grid has nowhere to shrink to --
+   fall back to a single scrollable column instead (session, then a
+   horizontally-scrollable tool rail, the canvas, a horizontally-scrollable
+   panel, then status), so every control stays reachable rather than being
+   hidden entirely. */
+@media (max-width: 700px) {
+  .studio-layout #workspace {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .studio-layout #studio-tool-rail {
+    flex: 0 0 auto;
+    flex-direction: row;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+
+  .studio-layout #canvas-viewport {
+    flex: 1 1 auto;
+    min-height: 220px;
+  }
+
+  .studio-layout #studio-panel {
+    flex: 0 0 auto;
+    flex-direction: row;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    overflow-x: auto;
+    overflow-y: visible;
+    max-height: 40vh;
+  }
+
+  .studio-layout #studio-panel .ribbon-group {
+    flex: 0 0 auto;
+    border-bottom: none;
+    border-right: 1px solid var(--divider);
+  }
+}
+
 /* --- Responsive foundation ---------------------------------------------------
    At narrow viewports the ribbon already wraps on its own (flex-wrap above);
    this block only shrinks the few controls that would otherwise overflow a
