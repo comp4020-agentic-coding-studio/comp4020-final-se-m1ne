@@ -3,12 +3,10 @@
 // Integration-level coverage for the Pencil/Eraser independent-size
 // regression fix: this boots the REAL public/pixel-editor.js against the
 // REAL public/index.html markup (not a reimplementation or a hand-built DOM
-// subset), with only fetch and the canvas 2D context stubbed out -- jsdom
-// does not implement actual canvas rendering without the `canvas` native
-// package, which this project deliberately does not add (see
-// spec/colour-picker-ui.test.ts's own comment), and there is no live HTTP
-// server in this file (unlike spec/pixel-api.test.ts), so every network call
-// pixel-editor.js makes is captured by a fetch mock instead.
+// subset), with only fetch, EventSource, and the canvas 2D context stubbed
+// out (spec/pixel-editor-test-helpers.ts) -- jsdom implements neither real
+// canvas rendering nor EventSource, and there is no live HTTP/SSE server in
+// this file (unlike spec/pixel-api.test.ts/spec/pixel-realtime.test.ts).
 //
 // This directly exercises what a pure-function test of createBrushSizeState
 // (spec/pixeldoc.test.ts) cannot: that the ACTUAL slider/numeric input
@@ -16,109 +14,18 @@
 // gesture sends the correct per-tool size in its real POST request body.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import fs from "node:fs";
-import path from "node:path";
-
-const indexHtmlPath = path.resolve(__dirname, "../public/index.html");
-const fullIndexHtml = fs.readFileSync(indexHtmlPath, "utf8");
-const bodyHtml = fullIndexHtml.match(/<body>([\s\S]*)<\/body>/)![1];
-
-type PostedRequest = { url: string; body: Record<string, unknown> };
-
-function jsonResponse(data: unknown, status = 200) {
-  return {
-    ok: status < 400,
-    status,
-    json: async () => data,
-    headers: { get: () => null },
-  } as unknown as Response;
-}
-
-// Mocks exactly the handful of endpoints a Public pixel-editor boot and one
-// draw + one erase gesture touch -- everything else 200s with an empty body,
-// never reached in this test's own scenarios.
-function installFetchMock(posted: PostedRequest[]) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: unknown, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "/api/me") return jsonResponse({ ownerId: "owner-1", nickname: null });
-      if (url === "/api/pixels" && !init) return jsonResponse([]); // GET: authoritative ops list, empty
-      if (url === "/api/pixels/draw" || url === "/api/pixels/erase") {
-        const body = JSON.parse(String(init!.body));
-        posted.push({ url, body });
-        return jsonResponse(
-          {
-            id: `op-${posted.length}`,
-            ownerId: "owner-1",
-            kind: url.endsWith("draw") ? "draw" : "erase",
-            color: body.color ?? null,
-            size: body.size,
-            points: body.points,
-            createdAt: Date.now(),
-            seq: posted.length,
-            docKind: "pixel",
-            active: true,
-          },
-          201,
-        );
-      }
-      return jsonResponse({});
-    }),
-  );
-}
-
-function installCanvasStub() {
-  // jsdom returns null from getContext("2d") without the native `canvas`
-  // package; pixel-editor.js's own #canvas ctx calls have no null-guard
-  // (unlike colour-picker-ui.js's colour-wheel canvas, which already guards
-  // every drawing call specifically so it degrades gracefully under this
-  // exact jsdom limitation -- see spec/colour-picker-ui.test.ts), so #canvas
-  // alone gets a real, minimally-callable stub here; every OTHER canvas
-  // (the colour wheel included) keeps jsdom's real `null`, exercising
-  // colour-picker-ui.js's own already-tested defensive path instead of
-  // papering over it with a second, more elaborate fake context.
-  const stub = {
-    fillStyle: "",
-    fillRect: () => {},
-    clearRect: () => {},
-    getImageData: () => ({ data: new Uint8ClampedArray(4) }),
-  };
-  HTMLCanvasElement.prototype.getContext = vi.fn(function (this: HTMLCanvasElement) {
-    return this.id === "canvas" ? stub : null;
-  }) as unknown as typeof HTMLCanvasElement.prototype.getContext;
-  // jsdom does not implement pointer capture at all (setPointerCapture is
-  // undefined); pixel-editor.js calls it unconditionally on pointerdown.
-  HTMLCanvasElement.prototype.setPointerCapture = HTMLCanvasElement.prototype.setPointerCapture ?? (() => {});
-}
-
-async function flush() {
-  // Lets the mocked fetch's resolved promises (and the .then chain in
-  // bootPixelEditor's loadMe().then(loadOps).then(...)) actually drain.
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
+import { type PostedRequest, bootPixelEditorForTest, firePointer, flush } from "./pixel-editor-test-helpers.js";
 
 function fireInput(el: Element, value: string) {
   (el as HTMLInputElement).value = value;
   el.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-function firePointer(el: Element, type: string, props: Partial<PointerEvent>) {
-  el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, ...props }));
-}
-
 let posted: PostedRequest[];
 
 beforeEach(async () => {
-  vi.resetModules();
   posted = [];
-  document.body.innerHTML = bodyHtml;
-  installCanvasStub();
-  installFetchMock(posted);
-  // Boots as the Public pixel wall: location.pathname has no /room/ prefix.
-  await import("../public/pixel-editor.js");
-  await flush();
+  await bootPixelEditorForTest(posted);
 });
 
 afterEach(() => {

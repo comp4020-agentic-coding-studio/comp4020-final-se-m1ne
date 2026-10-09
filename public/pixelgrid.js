@@ -229,7 +229,27 @@ export function replayPixelOps(ops, width, height) {
 
   for (const op of ops) {
     if (op.active === false) continue; // undone -- excluded from replay, same meaning as listOps' active = 1 filter
-    const cells = cellsForStroke(op.points, op.size, width, height);
+    // Rasterizing a large brush (up to size 100) over a long stroke is the
+    // one genuinely expensive step here -- cached directly on the op object
+    // (the same technique public/pixel-editor.js's own opBounds already uses
+    // for _cellBounds), keyed by width/height so two different document
+    // sizes replaying the SAME op object (see this module's own "independent
+    // grid dimensions" test) never share a stale cache. Without this, EVERY
+    // call to replayPixelOps -- which runs again after every single
+    // completed gesture, not just the expensive one -- re-rasterizes the
+    // ENTIRE op history from scratch, so one large brush stroke early in a
+    // session made every later gesture (even a tiny one) pay that same cost
+    // again, forever. The cache makes that cost paid once per op, not once
+    // per replay.
+    const cacheKey = `${width}x${height}`;
+    let cells;
+    if (op._rasterCacheKey === cacheKey) {
+      cells = op._rasterCache;
+    } else {
+      cells = cellsForStroke(op.points, op.size, width, height);
+      op._rasterCache = cells;
+      op._rasterCacheKey = cacheKey;
+    }
     if (cells.length === 0) continue;
 
     for (const { x, y } of cells) {

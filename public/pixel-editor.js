@@ -19,11 +19,11 @@
 // a live gesture still renders correctly (including an erase correctly
 // revealing an underlying contribution) without that per-frame cost.
 //
-// Step 6 (client-side SSE) plugs into this same structure without a rewrite:
-// allOps/pendingOps/current and loadOps()/rebuildCommittedGrid() are exactly
-// the authoritative-replay + local-pending-stroke seam an incoming `sync`/
-// `op`/`undo`/`redo` event needs to update, the same way performUndo/
-// persistGesture already do today via a plain fetch.
+// Real-time sync (startRealtimeSync, below) plugs into this same structure
+// without a rewrite: allOps/pendingOps/current and rebuildCommittedGrid()
+// are exactly the authoritative-replay + local-pending-stroke seam an
+// incoming `sync`/`op`/`undo`/`redo` SSE event updates, the same seam
+// persistGesture's own local fetch always has.
 
 import { fadeOpacity } from "./fade.js";
 import { hexToRgb, rgbToHex } from "./colour.js";
@@ -167,6 +167,7 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   const eraseUrl = `${opsUrl}/erase`;
   const undoUrl = `${opsUrl}/undo`;
   const redoUrl = `${opsUrl}/redo`;
+  const streamUrl = `${opsUrl}/stream`;
 
   // The backing store is the grid itself -- 1 canvas pixel = 1 logical pixel,
   // forever. Never resized by zoom/Fit/window resize (see applyZoom below,
@@ -390,11 +391,74 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     }
   }
 
-  async function loadOps() {
-    const res = await fetch(opsUrl);
-    allOps = await res.json();
+  // --- Real-time sync (SSE) -------------------------------------------------
+  // Reuses the existing /api/pixels/stream (Public) and
+  // /api/rooms/:code/pixels/stream (Private) endpoints unchanged -- never a
+  // second transport. The server's own design (see server/index.js's
+  // startPixelStream) sends a full authoritative snapshot as literally the
+  // first frame of every connection, including every reconnect, so a plain
+  // `sync` handler that REPLACES allOps wholesale is correct for the initial
+  // load AND for recovering after a dropped connection -- no separate GET
+  // request, no Last-Event-ID bookkeeping. `op`/`undo`/`redo` are the same
+  // three broadcasts handlePixelDraw/handlePixelErase/the undo and redo
+  // routes already send on every successful write, to every subscriber of
+  // this exact scope (Public, or this one room) -- including the browser
+  // tab that made the request itself, which is why both handlers below
+  // dedupe by id rather than assuming every event is "from someone else".
+  function applyRemoteOpState(data) {
+    const idx = allOps.findIndex((op) => op.id === data.id);
+    if (idx === -1) allOps.push(data);
+    else allOps[idx] = data;
+    // Undo/redo can touch any cell anywhere in the document's history, so
+    // there is no cheaper correct option here than a full repaint -- unlike
+    // a draw/erase, this is not a per-frame hot path (a user undoes/redoes
+    // far less often than they draw), so that cost is a non-issue.
     rebuildCommittedGrid();
     renderFromCommittedGrid();
+    updateUndoRedoButtons();
+  }
+
+  function startRealtimeSync() {
+    const source = new EventSource(streamUrl);
+
+    source.addEventListener("sync", (event) => {
+      const data = JSON.parse(event.data);
+      allOps = data.ops;
+      rebuildCommittedGrid();
+      renderFromCommittedGrid();
+      updateUndoRedoButtons();
+    });
+
+    source.addEventListener("op", (event) => {
+      const data = JSON.parse(event.data);
+      // Already applied locally the instant persistGesture's own fetch
+      // resolved (see below) -- this is that same op's broadcast echoing
+      // back, not new information, so there is nothing further to do.
+      if (allOps.some((op) => op.id === data.id)) return;
+      allOps.push(data);
+      rebuildCommittedGrid();
+      // A remote collaborator's stroke was never rendered locally (no local
+      // gesture painted it incrementally the way our own strokes are), so
+      // it needs the one real repaint to actually become visible; our own
+      // just-finished gesture already looks correct on screen without one
+      // (this is the same success-path optimization persistGesture already
+      // relies on, just phrased the other way around: skip the repaint
+      // when WE already know it's right, do it when we don't).
+      if (data.ownerId !== myOwnerId) renderFromCommittedGrid();
+      updateUndoRedoButtons();
+    });
+
+    source.addEventListener("undo", (event) => applyRemoteOpState(JSON.parse(event.data)));
+    source.addEventListener("redo", (event) => applyRemoteOpState(JSON.parse(event.data)));
+
+    // Deliberately no onerror/reconnect handling: EventSource retries
+    // natively, and every retry is just a brand new connection to the same
+    // route, which always answers with an equally fresh `sync` snapshot --
+    // there is no missed-event state to reconcile by hand. Closed
+    // automatically by the browser on navigation/unload; this app has no
+    // in-page document-switching to additionally close it for (leaving a
+    // room is always a full navigation -- see leaveRoom below).
+    return source;
   }
 
   async function loadMe() {
@@ -515,8 +579,11 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     const { op } = await res.json();
     if (!op) return; // nothing left to undo -- not an error, just a no-op
     myRedoCount += 1;
-    await loadOps(); // reloads authoritative active ops and repaints via the existing engine -- no alternate replay path
-    updateUndoRedoButtons();
+    updateUndoRedoButtons(); // the Redo button's own enablement only ever depends on local myRedoCount, not on allOps
+    // allOps/committedGrid/the repaint all update once the matching `undo`
+    // SSE broadcast echoes back (applyRemoteOpState, above) -- the exact
+    // same event a remote collaborator's own undo delivers, so both are
+    // handled by one code path, never two.
   }
 
   async function performRedo() {
@@ -526,7 +593,6 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     const { op } = await res.json();
     if (!op) return;
     myRedoCount = Math.max(0, myRedoCount - 1);
-    await loadOps();
     updateUndoRedoButtons();
   }
 
@@ -744,11 +810,25 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     gridOverlay.hidden = false;
     gridOverlay.style.left = `${canvas.offsetLeft}px`;
     gridOverlay.style.top = `${canvas.offsetTop}px`;
-    gridOverlay.style.width = canvas.style.width;
-    gridOverlay.style.height = canvas.style.height;
+    // The overlay's own box is sized from the canvas's ACTUAL rendered rect
+    // (getBoundingClientRect), not from canvas.style.width/height's raw
+    // string: a browser can round/sub-pixel-snap a fractional CSS length
+    // (gridWidth * zoom is essentially never a whole number) when it
+    // actually lays the canvas out, so the TRUE on-screen scale can differ
+    // very slightly from the raw `zoom` value. Deriving the grid tile size
+    // from this same rect -- rather than recomputing it independently from
+    // `zoom` -- means the grid is always measured against the exact same
+    // geometry the canvas itself was actually rendered at, so the two can
+    // never drift apart. That drift was small in absolute terms but got
+    // multiplied by a large coarse cellSize at low zoom, which is exactly
+    // where the misalignment was visible.
+    const rect = canvas.getBoundingClientRect();
+    gridOverlay.style.width = `${rect.width}px`;
+    gridOverlay.style.height = `${rect.height}px`;
     const cellSize = gridCellLogicalSize(zoom, GRID_MIN_ZOOM_FOR_DISPLAY, GRID_MAX_CELL_SIZE);
-    const screenCellPx = cellSize * zoom;
-    gridOverlay.style.backgroundSize = `${screenCellPx}px ${screenCellPx}px`;
+    const screenCellPxX = cellSize * (rect.width / gridWidth);
+    const screenCellPxY = cellSize * (rect.height / gridHeight);
+    gridOverlay.style.backgroundSize = `${screenCellPxX}px ${screenCellPxY}px`;
   }
 
   // Reflects the user's own Grid preference in the Document popover --
@@ -1120,7 +1200,15 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     if (isPublicPixelWall) applyZoom(1);
     else applyFit();
   });
-  loadMe().then(loadOps).then(updateUndoRedoButtons); // ownership must be known before "my own" pending work can render
+  // ownership must be known before "my own" pending work (and the op/undo/
+  // redo echo dedupe above) can be judged correctly; startRealtimeSync's own
+  // `sync` handler is what actually populates allOps and renders for the
+  // first time -- see the SSE section above for why there is no separate
+  // GET request for the initial load any more.
+  loadMe().then(() => {
+    startRealtimeSync();
+    updateUndoRedoButtons();
+  });
 
   // Exists solely to animate the Public wall's fade -- a Private studio's
   // effectiveOpacity never changes with time, so there is nothing for a

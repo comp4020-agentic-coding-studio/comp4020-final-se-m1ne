@@ -54,7 +54,7 @@
   /* The pixel-grid overlay and the "grid" accent used elsewhere both use
      this blue, matching the reference's own blue grid lines (rather than a
      neutral gray) while staying the same restrained hue as --focus-ring. */
-  --grid-line: rgba(30, 136, 229, 0.4);
+  --grid-line: rgba(30, 136, 229, 0.3);
   /* Pixel-game visual language: small, crisp corners (never fully square --
      a hairline radius still avoids aliased-looking corners on a hi-DPI
      screen -- and never the softer, more "modern web form" 4-6px radius
@@ -95,7 +95,7 @@
      value rather than introducing a second dark tone with no real need. */
   --canvas-surround-bg: #1f1f22;
   --canvas-dot: rgba(255, 255, 255, 0.1);
-  --grid-line: rgba(108, 180, 255, 0.45);
+  --grid-line: rgba(108, 180, 255, 0.32);
 }
 
 html,

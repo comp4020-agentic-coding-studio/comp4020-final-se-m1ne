@@ -6,57 +6,21 @@
 // duplicated), and the persistGesture repaint-skip performance change. Same
 // technique as spec/pixel-editor-tool-size.test.ts: boots the REAL
 // public/pixel-editor.js against the REAL public/index.html markup, with
-// only fetch and the canvas 2D context stubbed out.
+// fetch, EventSource, and the canvas 2D context stubbed out
+// (spec/pixel-editor-test-helpers.ts) -- this file keeps its own local
+// canvas stub (not the shared one) so it can record clearRect calls.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import fs from "node:fs";
-import path from "node:path";
-
-const indexHtmlPath = path.resolve(__dirname, "../public/index.html");
-const fullIndexHtml = fs.readFileSync(indexHtmlPath, "utf8");
-const bodyHtml = fullIndexHtml.match(/<body>([\s\S]*)<\/body>/)![1];
-
-type PostedRequest = { url: string; body: Record<string, unknown> };
-
-function jsonResponse(data: unknown, status = 200) {
-  return {
-    ok: status < 400,
-    status,
-    json: async () => data,
-    headers: { get: () => null },
-  } as unknown as Response;
-}
-
-function installFetchMock(posted: PostedRequest[]) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: unknown, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "/api/me") return jsonResponse({ ownerId: "owner-1", nickname: null });
-      if (url === "/api/pixels" && !init) return jsonResponse([]);
-      if (url === "/api/pixels/draw" || url === "/api/pixels/erase") {
-        const body = JSON.parse(String(init!.body));
-        posted.push({ url, body });
-        return jsonResponse(
-          {
-            id: `op-${posted.length}`,
-            ownerId: "owner-1",
-            kind: url.endsWith("draw") ? "draw" : "erase",
-            color: body.color ?? null,
-            size: body.size,
-            points: body.points,
-            createdAt: Date.now(),
-            seq: posted.length,
-            docKind: "pixel",
-            active: true,
-          },
-          201,
-        );
-      }
-      return jsonResponse({});
-    }),
-  );
-}
+import {
+  type PostedRequest,
+  bodyHtml,
+  firePointer,
+  flush,
+  installEventSourceStub,
+  installFetchMock,
+  jsonResponse,
+  latestEventSource,
+} from "./pixel-editor-test-helpers.js";
 
 let clearRectCalls: { x: number; y: number; w: number; h: number }[];
 
@@ -73,15 +37,18 @@ function installCanvasStub() {
     return this.id === "canvas" ? stub : null;
   }) as unknown as typeof HTMLCanvasElement.prototype.getContext;
   HTMLCanvasElement.prototype.setPointerCapture = HTMLCanvasElement.prototype.setPointerCapture ?? (() => {});
-}
-
-async function flush() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-function firePointer(el: Element, type: string, props: Partial<PointerEvent>) {
-  el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, ...props }));
+  // jsdom never performs real layout, so the real getBoundingClientRect
+  // always reports zeros -- that's fine for every other test here, but the
+  // grid-alignment fix specifically derives its spacing from THIS rect (see
+  // public/pixel-editor.js's updateGridOverlay), so a test that wants to
+  // verify that formula needs a rect proportional to what a real browser
+  // would report: #canvas's own declared CSS size (the same string
+  // applyZoom itself just wrote to canvas.style.width/height).
+  HTMLCanvasElement.prototype.getBoundingClientRect = function (this: HTMLCanvasElement) {
+    const width = this.id === "canvas" ? parseFloat(this.style.width) || 0 : 0;
+    const height = this.id === "canvas" ? parseFloat(this.style.height) || 0 : 0;
+    return { width, height, left: 0, top: 0, right: width, bottom: height, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+  };
 }
 
 let posted: PostedRequest[];
@@ -93,8 +60,11 @@ beforeEach(async () => {
   localStorage.clear();
   document.body.innerHTML = bodyHtml;
   installCanvasStub();
+  installEventSourceStub();
   installFetchMock(posted);
   await import("../public/pixel-editor.js"); // boots as Public: no /room/ prefix in jsdom's default location
+  await flush();
+  latestEventSource().emit("sync", { docKind: "pixel", width: 2048, height: 1152, ops: [] });
   await flush();
 });
 
