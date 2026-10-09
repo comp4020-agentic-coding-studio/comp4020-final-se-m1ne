@@ -294,6 +294,41 @@ it("a Private pixel room validates points against its own resolution, not Public
   expect(outOfBounds.status).toBe(400);
 });
 
+// --- Private brush size: full 1-64 range, never clamped to canvas size -----
+
+it("a Private pixel room accepts brush sizes well beyond Public's own cap, up to 64, with no arbitrary scaling by canvas size", async () => {
+  const room = await createRoom(32); // deliberately a SMALL 32x32 canvas
+  for (const size of [9, 32, 64]) {
+    const res = await postJson(`/api/rooms/${room.body.code}/pixels/draw`, {
+      color: "#1d1d1d",
+      size,
+      points: [{ x: 16, y: 16 }],
+    });
+    expect(res.status).toBe(201); // never rejected for being "too large relative to a 32x32 canvas"
+  }
+});
+
+it("a Private pixel room rejects a brush size above 64", async () => {
+  const room = await createRoom(256);
+  const res = await postJson(`/api/rooms/${room.body.code}/pixels/draw`, {
+    color: "#1d1d1d",
+    size: 65,
+    points: [{ x: 16, y: 16 }],
+  });
+  expect(res.status).toBe(400);
+});
+
+it("a Private pixel room's erase also accepts the full 1-64 brush range", async () => {
+  const room = await createRoom(64);
+  const res = await postJson(`/api/rooms/${room.body.code}/pixels/erase`, { size: 64, points: [{ x: 16, y: 16 }] });
+  expect(res.status).toBe(201);
+});
+
+it("Public still rejects a brush size above its own cap of 8, even though Private now allows up to 64", async () => {
+  const res = await postJson("/api/pixels/draw", { color: "#1d1d1d", size: 9, points: [{ x: 1, y: 1 }] });
+  expect(res.status).toBe(400);
+});
+
 // --- 6. Public/Private isolation for pixel ops -------------------------------
 
 it("Public pixel ops and a Private pixel room's ops never leak into each other", async () => {

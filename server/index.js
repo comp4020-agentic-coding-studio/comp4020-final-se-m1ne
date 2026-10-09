@@ -192,7 +192,12 @@ const PIXEL_RESOLUTIONS = [32, 64, 128, 256];
 const MIN_CANVAS_DIMENSION = 16;
 const MAX_CANVAS_DIMENSION = 512;
 const MIN_BRUSH_SIZE = 1;
-const MAX_BRUSH_SIZE = 8;
+// Public keeps its original, smaller ceiling; a Private pixel-art studio
+// supports the full professional range. This is a flat limit, never derived
+// from (or scaled by) that document's own width/height -- a 16x16 studio
+// permits the same 1-64 range as a 512x512 one.
+const PUBLIC_MAX_BRUSH_SIZE = 8;
+const PRIVATE_MAX_BRUSH_SIZE = 64;
 const BACKGROUND_KINDS = ["transparent", "white", "custom"];
 
 function isFiniteInt(value) {
@@ -220,8 +225,8 @@ function pixelPointsValid(points, width, height) {
   return Array.isArray(points) && points.length > 0 && points.every((p) => isPixelPoint(p, width, height));
 }
 
-function isValidBrushSize(size) {
-  return isFiniteInt(size) && size >= MIN_BRUSH_SIZE && size <= MAX_BRUSH_SIZE;
+function isValidBrushSize(size, maxSize) {
+  return isFiniteInt(size) && size >= MIN_BRUSH_SIZE && size <= maxSize;
 }
 
 // A room with no stored resolution is a legacy freehand room (Step 1's
@@ -430,15 +435,15 @@ function handlePixelCursor(req, res, roomId, width, height) {
 // caller's own server-derived ownerId (never the request body -- there is no
 // ownerId field in the body at all, identical to handleDraw's own contract).
 // Shared by the Public pixel wall and every pixel-art Private studio; width/
-// height are the only things that vary, resolved by the caller (never from
-// anything a client could supply directly) before this runs.
-function handlePixelDraw(req, res, roomId, width, height) {
+// height/maxBrushSize are the only things that vary, resolved by the caller
+// (never from anything a client could supply directly) before this runs.
+function handlePixelDraw(req, res, roomId, width, height, maxBrushSize) {
   const { color, size, points } = req.body ?? {};
 
-  if (typeof color !== "string" || !isValidBrushSize(size) || !pixelPointsValid(points, width, height)) {
+  if (typeof color !== "string" || !isValidBrushSize(size, maxBrushSize) || !pixelPointsValid(points, width, height)) {
     res.status(400).json({
       error:
-        `a pixel draw op needs a color, an integer brush size ${MIN_BRUSH_SIZE}-${MAX_BRUSH_SIZE}, ` +
+        `a pixel draw op needs a color, an integer brush size ${MIN_BRUSH_SIZE}-${maxBrushSize}, ` +
         `and at least one in-bounds integer {x, y} point`,
     });
     return;
@@ -478,12 +483,12 @@ function handlePixelDraw(req, res, roomId, width, height) {
 // clears the erasing owner's own latest contribution at a cell); this route
 // does no geometry or ownership comparison of its own, exactly like the
 // legacy handleErase never has.
-function handlePixelErase(req, res, roomId, width, height) {
+function handlePixelErase(req, res, roomId, width, height, maxBrushSize) {
   const { size, points } = req.body ?? {};
 
-  if (!isValidBrushSize(size) || !pixelPointsValid(points, width, height)) {
+  if (!isValidBrushSize(size, maxBrushSize) || !pixelPointsValid(points, width, height)) {
     res.status(400).json({
-      error: `a pixel erase op needs an integer brush size ${MIN_BRUSH_SIZE}-${MAX_BRUSH_SIZE} and at least one in-bounds integer {x, y} point`,
+      error: `a pixel erase op needs an integer brush size ${MIN_BRUSH_SIZE}-${maxBrushSize} and at least one in-bounds integer {x, y} point`,
     });
     return;
   }
@@ -514,8 +519,12 @@ app.get("/api/pixels/stream", (req, res) => {
   startPixelStream(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT);
 });
 
-app.post("/api/pixels/draw", (req, res) => handlePixelDraw(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT));
-app.post("/api/pixels/erase", (req, res) => handlePixelErase(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT));
+app.post("/api/pixels/draw", (req, res) =>
+  handlePixelDraw(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT, PUBLIC_MAX_BRUSH_SIZE),
+);
+app.post("/api/pixels/erase", (req, res) =>
+  handlePixelErase(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT, PUBLIC_MAX_BRUSH_SIZE),
+);
 
 app.post("/api/pixels/cursor", (req, res) =>
   handlePixelCursor(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT),
@@ -787,7 +796,7 @@ app.post("/api/rooms/:code/pixels/draw", (req, res) => {
     res.status(400).json({ error: "this room is a legacy freehand room; use /api/rooms/:code/ops/draw" });
     return;
   }
-  handlePixelDraw(req, res, code, room.width, room.height);
+  handlePixelDraw(req, res, code, room.width, room.height, PRIVATE_MAX_BRUSH_SIZE);
 });
 
 app.post("/api/rooms/:code/pixels/erase", (req, res) => {
@@ -801,7 +810,7 @@ app.post("/api/rooms/:code/pixels/erase", (req, res) => {
     res.status(400).json({ error: "this room is a legacy freehand room; use /api/rooms/:code/ops/erase" });
     return;
   }
-  handlePixelErase(req, res, code, room.width, room.height);
+  handlePixelErase(req, res, code, room.width, room.height, PRIVATE_MAX_BRUSH_SIZE);
 });
 
 app.post("/api/rooms/:code/pixels/undo", (req, res) => {

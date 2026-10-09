@@ -19,6 +19,8 @@ import {
   PIXEL_MIN_ZOOM,
   PIXEL_RESOLUTIONS,
   PIXEL_ZOOM_LEVELS,
+  PRIVATE_MAX_BRUSH_SIZE,
+  PUBLIC_MAX_BRUSH_SIZE,
   PUBLIC_PIXEL_HEIGHT,
   PUBLIC_PIXEL_WIDTH,
   removePendingOp,
@@ -89,25 +91,30 @@ describe("pixel resolution handling", () => {
 // --- Tool behaviour: brush size ------------------------------------------------
 
 describe("clampBrushSize", () => {
-  it("passes through any already-valid integer size 1-8 unchanged", () => {
-    for (let size = 1; size <= 8; size++) expect(clampBrushSize(size)).toBe(size);
+  it("passes through any already-valid integer within Public's 1-8 range unchanged", () => {
+    for (let size = 1; size <= PUBLIC_MAX_BRUSH_SIZE; size++) expect(clampBrushSize(size, PUBLIC_MAX_BRUSH_SIZE)).toBe(size);
   });
 
-  it("clamps below the minimum and above the maximum", () => {
-    expect(clampBrushSize(0)).toBe(1);
-    expect(clampBrushSize(-5)).toBe(1);
-    expect(clampBrushSize(9)).toBe(8);
-    expect(clampBrushSize(999)).toBe(8);
+  it("passes through any already-valid integer within Private's full 1-64 range unchanged, never arbitrarily narrowed", () => {
+    for (const size of [1, 2, 8, 9, 32, 63, 64]) expect(clampBrushSize(size, PRIVATE_MAX_BRUSH_SIZE)).toBe(size);
+  });
+
+  it("clamps below the minimum and above each scope's own maximum", () => {
+    expect(clampBrushSize(0, PUBLIC_MAX_BRUSH_SIZE)).toBe(1);
+    expect(clampBrushSize(-5, PRIVATE_MAX_BRUSH_SIZE)).toBe(1);
+    expect(clampBrushSize(9, PUBLIC_MAX_BRUSH_SIZE)).toBe(PUBLIC_MAX_BRUSH_SIZE);
+    expect(clampBrushSize(65, PRIVATE_MAX_BRUSH_SIZE)).toBe(PRIVATE_MAX_BRUSH_SIZE);
+    expect(clampBrushSize(999, PRIVATE_MAX_BRUSH_SIZE)).toBe(PRIVATE_MAX_BRUSH_SIZE);
   });
 
   it("rounds a fractional size to the nearest integer before clamping", () => {
-    expect(clampBrushSize(3.4)).toBe(3);
-    expect(clampBrushSize(3.6)).toBe(4);
+    expect(clampBrushSize(3.4, PRIVATE_MAX_BRUSH_SIZE)).toBe(3);
+    expect(clampBrushSize(3.6, PRIVATE_MAX_BRUSH_SIZE)).toBe(4);
   });
 
-  it("falls back to the default for a non-finite input rather than propagating NaN", () => {
-    expect(clampBrushSize(NaN)).toBe(2);
-    expect(clampBrushSize(Infinity)).toBe(2);
+  it("falls back to the default (or the scope's own max, if smaller) for a non-finite input rather than propagating NaN", () => {
+    expect(clampBrushSize(NaN, PRIVATE_MAX_BRUSH_SIZE)).toBe(2);
+    expect(clampBrushSize(Infinity, PRIVATE_MAX_BRUSH_SIZE)).toBe(2);
   });
 });
 

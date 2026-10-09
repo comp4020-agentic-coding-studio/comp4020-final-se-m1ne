@@ -33,7 +33,8 @@ import { replayPixelOps, cellsForStroke, cellKey } from "./pixelgrid.js";
 import { cursorDiameterCssPx, fitZoom, stepZoom, clampZoom } from "./viewport.js";
 import {
   MIN_BRUSH_SIZE,
-  MAX_BRUSH_SIZE,
+  PUBLIC_MAX_BRUSH_SIZE,
+  PRIVATE_MAX_BRUSH_SIZE,
   DEFAULT_BRUSH_SIZE,
   PIXEL_MIN_ZOOM,
   PIXEL_MAX_ZOOM,
@@ -55,6 +56,7 @@ const canvasViewport = document.getElementById("canvas-viewport");
 const toolCursor = document.getElementById("tool-cursor");
 const toolSizeSlider = document.getElementById("tool-size-slider");
 const toolSizeValue = document.getElementById("tool-size-value");
+const toolSizeNumber = document.getElementById("tool-size-number");
 const toolBrushButton = document.getElementById("tool-brush");
 const toolEraserButton = document.getElementById("tool-eraser");
 const toolEyedropperButton = document.getElementById("tool-eyedropper");
@@ -135,6 +137,7 @@ async function main() {
 
 function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   const isPublicPixelWall = roomCode === null;
+  const maxBrushSize = isPublicPixelWall ? PUBLIC_MAX_BRUSH_SIZE : PRIVATE_MAX_BRUSH_SIZE;
   const opsUrl = isPublicPixelWall ? "/api/pixels" : `/api/rooms/${roomCode}/pixels`;
   const drawUrl = `${opsUrl}/draw`;
   const eraseUrl = `${opsUrl}/erase`;
@@ -536,20 +539,33 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   canvas.addEventListener("pointercancel", endPointerAction);
 
   // --- Tools / size --------------------------------------------------------
-  // One shared range for Brush and Eraser alike (1-8 integer cells) -- unlike
-  // the freehand engine's two different per-tool ranges, pixel brush/eraser
-  // sizes mean the exact same thing (public/pixelgrid.js's PixelOp.size).
+  // One shared range for Brush and Eraser alike -- unlike the freehand
+  // engine's two different per-tool ranges, pixel brush/eraser sizes mean the
+  // exact same thing (public/pixelgrid.js's PixelOp.size). The range itself
+  // is scope-dependent (Public keeps its original 1-8 ceiling; a Private
+  // studio supports the full 1-64 professional range, regardless of that
+  // studio's own width/height) -- never a scaling rule derived from canvas
+  // size. A direct numeric input is shown alongside the slider (not instead
+  // of the freehand engine's own read-only #tool-size-value output, which
+  // stays untouched for public/app.js).
+  toolSizeValue.hidden = true;
+  toolSizeNumber.hidden = false;
+
   function syncSizeControlToMode() {
     if (mode === "eyedropper") {
       toolSizeSlider.disabled = true;
+      toolSizeNumber.disabled = true;
       return;
     }
     toolSizeSlider.disabled = false;
+    toolSizeNumber.disabled = false;
     toolSizeSlider.min = String(MIN_BRUSH_SIZE);
-    toolSizeSlider.max = String(MAX_BRUSH_SIZE);
+    toolSizeSlider.max = String(maxBrushSize);
     toolSizeSlider.step = "1";
     toolSizeSlider.value = String(brushSizeCells);
-    toolSizeValue.textContent = `${brushSizeCells}px`;
+    toolSizeNumber.min = String(MIN_BRUSH_SIZE);
+    toolSizeNumber.max = String(maxBrushSize);
+    toolSizeNumber.value = String(brushSizeCells);
   }
 
   function updateCursorSize() {
@@ -582,11 +598,14 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   toolEraserButton.addEventListener("click", () => setMode("eraser"));
   toolEyedropperButton.addEventListener("click", () => setMode("eyedropper"));
 
-  toolSizeSlider.addEventListener("input", () => {
-    brushSizeCells = clampBrushSize(Number(toolSizeSlider.value));
-    toolSizeValue.textContent = `${brushSizeCells}px`;
+  function setBrushSize(rawValue) {
+    brushSizeCells = clampBrushSize(Number(rawValue), maxBrushSize);
+    toolSizeSlider.value = String(brushSizeCells);
+    toolSizeNumber.value = String(brushSizeCells);
     updateCursorSize();
-  });
+  }
+  toolSizeSlider.addEventListener("input", () => setBrushSize(toolSizeSlider.value));
+  toolSizeNumber.addEventListener("input", () => setBrushSize(toolSizeNumber.value));
 
   canvas.addEventListener("pointerenter", (event) => {
     if (mode === "eyedropper") return;

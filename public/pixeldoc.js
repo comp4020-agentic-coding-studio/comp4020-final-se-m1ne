@@ -19,8 +19,14 @@ export const PUBLIC_PIXEL_HEIGHT = 1152;
 export const PIXEL_RESOLUTIONS = [32, 64, 128, 256];
 export const DEFAULT_PIXEL_RESOLUTION = 128;
 
+// Public keeps its original, smaller ceiling; a Private pixel-art studio
+// supports the full professional range, 1-64, regardless of that studio's
+// own (possibly much smaller) width/height -- never a scaling rule derived
+// from canvas size. Kept in sync by hand with server/index.js's own
+// PUBLIC_MAX_BRUSH_SIZE/PRIVATE_MAX_BRUSH_SIZE.
 export const MIN_BRUSH_SIZE = 1;
-export const MAX_BRUSH_SIZE = 8;
+export const PUBLIC_MAX_BRUSH_SIZE = 8;
+export const PRIVATE_MAX_BRUSH_SIZE = 64;
 export const DEFAULT_BRUSH_SIZE = 2;
 
 // New Canvas dialog: independent, directly-editable width/height (a
@@ -89,10 +95,13 @@ export function isValidPixelResolution(value) {
   return PIXEL_RESOLUTIONS.includes(value);
 }
 
-export function clampBrushSize(size) {
+// maxSize is the caller's own scope ceiling (PUBLIC_MAX_BRUSH_SIZE or
+// PRIVATE_MAX_BRUSH_SIZE) -- never derived here from a document's own
+// dimensions.
+export function clampBrushSize(size, maxSize) {
   const n = Math.round(size);
-  if (!Number.isFinite(n)) return DEFAULT_BRUSH_SIZE;
-  return Math.min(MAX_BRUSH_SIZE, Math.max(MIN_BRUSH_SIZE, n));
+  if (!Number.isFinite(n)) return Math.min(DEFAULT_BRUSH_SIZE, maxSize);
+  return Math.min(maxSize, Math.max(MIN_BRUSH_SIZE, n));
 }
 
 // Live-clamps a New Canvas dialog width/height field as the user types --

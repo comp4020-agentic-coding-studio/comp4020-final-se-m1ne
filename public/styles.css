@@ -374,6 +374,21 @@ body {
   text-align: right;
 }
 
+#tool-size-number {
+  width: 3.4em;
+  padding: 3px 4px;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
+#tool-size-number[hidden] {
+  display: none;
+}
+
 #palette {
   display: flex;
   gap: 5px;

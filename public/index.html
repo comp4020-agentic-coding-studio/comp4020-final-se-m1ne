@@ -133,6 +133,20 @@
             <div class="size-control">
               <input type="range" id="tool-size-slider" min="1" max="40" value="6" step="1" />
               <output id="tool-size-value" for="tool-size-slider">6px</output>
+              <!-- Pixel mode's own direct numeric input, alongside (not
+                   instead of) the slider -- public/app.js's #tool-size-value
+                   stays a plain read-only <output>, unaffected; this is a
+                   separate, additional control only pixel-editor.js shows. -->
+              <input
+                type="number"
+                id="tool-size-number"
+                min="1"
+                max="64"
+                step="1"
+                value="2"
+                aria-label="Brush size in pixels"
+                hidden
+              />
             </div>
           </div>
         </div>
