@@ -12,7 +12,9 @@ import {
   DEFAULT_BRUSH_SIZE,
   DEFAULT_CANVAS_SIZE,
   DEFAULT_PIXEL_RESOLUTION,
+  GRID_MAX_CELL_SIZE,
   GRID_MIN_ZOOM_FOR_DISPLAY,
+  gridCellLogicalSize,
   isValidBackgroundKind,
   isValidPixelResolution,
   MAX_BRUSH_SIZE,
@@ -318,41 +320,66 @@ describe("zoomToSliderPosition / sliderPositionToZoom", () => {
   });
 });
 
-// --- Pixel grid overlay: visibility threshold ---------------------------------
+// --- Pixel grid overlay: visibility and adaptive spacing -----------------------
 // The grid overlay itself is a CSS background-image tile (public/styles.css's
 // #pixel-grid-overlay), positioned/sized by public/pixel-editor.js to match
 // the canvas's own CSS box -- O(1) regardless of document size or zoom, never
-// a per-cell DOM/canvas draw. The only real DECISION logic is this: whether
-// it should currently be visible at all.
+// a per-cell DOM/canvas draw. Two separate decisions: whether it's visible at
+// all (shouldShowPixelGrid -- the user's own preference, full stop), and how
+// far apart its lines are drawn (gridCellLogicalSize -- adaptive, so Grid ON
+// stays visibly useful at ANY zoom instead of disappearing below a threshold,
+// which is exactly the bug this replaced: Grid ON previously produced no
+// visible difference at ordinary zoom levels like Public's own 56% or
+// Private's own 514%).
 
 describe("shouldShowPixelGrid", () => {
-  it("GRID_MIN_ZOOM_FOR_DISPLAY is 8 (screen px per logical px)", () => {
+  it("is purely the user's own preference -- zoom never hides the grid outright", () => {
+    expect(shouldShowPixelGrid(true)).toBe(true);
+    expect(shouldShowPixelGrid(false)).toBe(false);
+  });
+});
+
+describe("gridCellLogicalSize", () => {
+  it("GRID_MIN_ZOOM_FOR_DISPLAY is 8 (screen px per logical px) and GRID_MAX_CELL_SIZE is 128", () => {
     expect(GRID_MIN_ZOOM_FOR_DISPLAY).toBe(8);
+    expect(GRID_MAX_CELL_SIZE).toBe(128);
   });
 
-  it("preference OFF never shows the grid, regardless of zoom", () => {
-    expect(shouldShowPixelGrid(1, false)).toBe(false);
-    expect(shouldShowPixelGrid(32, false)).toBe(false);
-    expect(shouldShowPixelGrid(0.1, false)).toBe(false);
+  it("at or above the threshold zoom, spacing is 1 -- individual logical pixel boundaries", () => {
+    expect(gridCellLogicalSize(8)).toBe(1);
+    expect(gridCellLogicalSize(32)).toBe(1);
+    expect(gridCellLogicalSize(100)).toBe(1);
   });
 
-  it("preference ON shows the grid at or above the threshold, suppresses below it", () => {
-    expect(shouldShowPixelGrid(7.99, true)).toBe(false);
-    expect(shouldShowPixelGrid(8, true)).toBe(true);
-    expect(shouldShowPixelGrid(32, true)).toBe(true);
-    expect(shouldShowPixelGrid(1, true)).toBe(false);
+  it("below the threshold, spacing widens to the smallest power of two that stays legible", () => {
+    // Public's own ordinary zoom, 56%: 1*0.56, 2*0.56, 4*0.56, 8*0.56 are all
+    // still under 8; 16*0.56 = 8.96 is the first that clears it.
+    expect(gridCellLogicalSize(0.56)).toBe(16);
+    // Private's own ordinary zoom, 514%: 1*5.14 = 5.14 (under 8),
+    // 2*5.14 = 10.28 (clears it) -- a sparser-than-1 but still fine grid,
+    // not simply hidden the way it used to be below 8x.
+    expect(gridCellLogicalSize(5.14)).toBe(2);
   });
 
-  it("the threshold is an explicit parameter, not hardcoded, for scope-specific reuse", () => {
-    expect(shouldShowPixelGrid(4, true, 4)).toBe(true);
-    expect(shouldShowPixelGrid(3.99, true, 4)).toBe(false);
+  it("never spaces lines further apart than GRID_MAX_CELL_SIZE, even at extremely low zoom", () => {
+    expect(gridCellLogicalSize(0.001)).toBe(GRID_MAX_CELL_SIZE);
   });
 
-  it("suppression at low zoom never depends on iterating the document -- same result for any width/height", () => {
-    // Not a literal performance test (that needs real profiling -- see the
-    // project report), but confirms the decision takes no document-size
-    // argument at all, structurally ruling out an O(area) implementation.
-    expect(shouldShowPixelGrid.length).toBeLessThanOrEqual(3);
+  it("the resulting spacing is always a power of two, so lines always land on a true logical pixel boundary", () => {
+    for (const zoom of [0.1, 0.25, 0.56, 1, 2, 5.14, 8, 32]) {
+      const cell = gridCellLogicalSize(zoom);
+      expect(Math.log2(cell) % 1).toBe(0);
+    }
+  });
+
+  it("the threshold and cap are explicit parameters, not hardcoded, for scope-specific reuse", () => {
+    expect(gridCellLogicalSize(4, 4, 128)).toBe(1);
+    expect(gridCellLogicalSize(3.99, 4, 128)).toBe(2);
+    expect(gridCellLogicalSize(0.001, 8, 16)).toBe(16); // capped well below the default 128
+  });
+
+  it("never depends on iterating the document -- same result for any width/height (structurally O(1))", () => {
+    expect(gridCellLogicalSize.length).toBeLessThanOrEqual(3);
   });
 });
 

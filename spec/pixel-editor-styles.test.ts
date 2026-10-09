@@ -13,27 +13,65 @@ import path from "node:path";
 
 const css = fs.readFileSync(path.resolve(__dirname, "../public/styles.css"), "utf8");
 
-describe("left size rail stays within its narrow budget (styles.css source)", () => {
-  it("#tool-size-number is narrow enough for the rail's ~52px target (60px hard max)", () => {
-    const match = css.match(/#tool-size-number\s*\{[^}]*\bwidth:\s*([\d.]+)em/);
-    expect(match, "#tool-size-number should declare an explicit em width").toBeTruthy();
-    const widthEm = Number(match![1]);
-    // 2.8em keeps the rail comfortably under the 60px hard max once its own
-    // padding/border is added (see the CSS's own comment for the math);
-    // anything at or above the old 3.6em would blow the budget again.
-    expect(widthEm).toBeLessThanOrEqual(3.0);
-    expect(widthEm).toBeGreaterThanOrEqual(2.4); // narrow enough to re-truncate "100" below this
-  });
+// Assumes the browser default root font-size (16px) -- this project sets no
+// html{font-size} override (confirmed by grep during this task), so
+// #tool-size-number's own `font-size: 0.85rem` resolves to 13.6px, and its
+// own `width: Nem` is relative to THAT (its own font-size), per CSS's em
+// definition.
+const ROOT_FONT_PX = 16;
 
-  it("the side rail's own padding stays minimal (narrow-rail budget, not just the number input)", () => {
-    const match = css.match(/\.studio-layout #studio-side-rail\s*\{[^}]*\bpadding:\s*([^;]+);/);
-    expect(match, "#studio-side-rail should declare explicit padding").toBeTruthy();
-    // e.g. "8px 1px" -- the horizontal (second) value must stay small; a
-    // return to something like "10px 6px" would push the rail back toward
-    // its previous, rejected ~138px width.
-    const parts = match![1].trim().split(/\s+/).map((v) => parseFloat(v));
-    const horizontal = parts.length >= 2 ? parts[1] : parts[0];
-    expect(horizontal).toBeLessThanOrEqual(4);
+function parsePxOrEm(value: string, ownFontPx: number): number {
+  const trimmed = value.trim();
+  if (trimmed.endsWith("em")) return parseFloat(trimmed) * ownFontPx;
+  return parseFloat(trimmed); // px (or bare 0)
+}
+
+function horizontalOf(shorthand: string): number {
+  // CSS padding/border shorthand: 1 value = all sides, 2 = vertical
+  // horizontal, 3 = top horizontal bottom, 4 = top right bottom left.
+  const parts = shorthand.trim().split(/\s+/);
+  if (parts.length === 1) return parseFloat(parts[0]) * 2;
+  if (parts.length === 2) return parseFloat(parts[1]) * 2;
+  if (parts.length === 3) return parseFloat(parts[1]) * 2;
+  return parseFloat(parts[1]) + parseFloat(parts[3]);
+}
+
+describe("left size rail stays within its narrow budget (styles.css source)", () => {
+  it("computes to at/under the 48px hard max (44px target), using only the declared CSS values", () => {
+    const numberRule = css.match(/#tool-size-number\s*\{[^}]*\}/)![0];
+    const fontSizeMatch = numberRule.match(/font-size:\s*([\d.]+)rem/);
+    expect(fontSizeMatch, "#tool-size-number should declare its own font-size").toBeTruthy();
+    const ownFontPx = Number(fontSizeMatch![1]) * ROOT_FONT_PX;
+
+    const widthMatch = numberRule.match(/\bwidth:\s*([\d.]+)em/);
+    expect(widthMatch, "#tool-size-number should declare an explicit em width").toBeTruthy();
+    const numberInputWidthPx = Number(widthMatch![1]) * ownFontPx; // border-box width (box-sizing: border-box is global)
+
+    const railRule = css.match(/\.studio-layout #studio-side-rail\s*\{[^}]*\}/)![0];
+    const railPadding = railRule.match(/\bpadding:\s*([^;]+);/)![1];
+    const railBorder = railRule.match(/border-right:\s*([\d.]+)px/)![1];
+    const railHorizontal = horizontalOf(railPadding) + Number(railBorder);
+
+    const controlRule = css.match(/\.side-rail-control\s*\{[^}]*\}/)![0];
+    const controlPadding = controlRule.match(/\bpadding:\s*([^;]+);/)![1];
+    const controlHorizontal = horizontalOf(controlPadding);
+
+    // The number input is the widest content in the rail (wider than the
+    // 20px vertical slider and the short "Size" label) -- see the CSS's own
+    // comment for why. Total rail width = widest content + every
+    // non-content horizontal space around it.
+    const totalWidth = numberInputWidthPx + controlHorizontal + railHorizontal;
+
+    expect(totalWidth).toBeLessThanOrEqual(48); // hard max
+    // Also confirm it isn't narrowed so far that 3 monospace digits
+    // ("100") would no longer fit -- same box-sizing:border-box width,
+    // minus this element's own padding/border, must leave reasonable room.
+    const numberPadding = numberRule.match(/\bpadding:\s*([^;]+);/)![1];
+    const numberBorderMatch = numberRule.match(/border:\s*([\d.]+)px/);
+    const numberNonText = horizontalOf(numberPadding) + (numberBorderMatch ? Number(numberBorderMatch[1]) * 2 : 0);
+    const availableForText = numberInputWidthPx - numberNonText;
+    const roughCharWidth = ownFontPx * 0.65; // a generous monospace estimate
+    expect(availableForText).toBeGreaterThanOrEqual(roughCharWidth * 3); // "100" is 3 characters
   });
 });
 

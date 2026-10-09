@@ -108,24 +108,49 @@ export function sliderPositionToZoom(position, minZoom, maxZoom) {
 }
 
 // Below this many screen (CSS) pixels per logical pixel, individual grid
-// cells are too small for gridlines to help rather than just add noise --
-// `zoom` in this app IS already "screen px per logical px" by construction
-// (canvas.style.width is always gridWidth * zoom), so this is compared
-// directly against it, no separate unit conversion needed.
+// cells are too small for gridlines spaced every single logical pixel to
+// help rather than just add noise -- `zoom` in this app IS already "screen
+// px per logical px" by construction (canvas.style.width is always
+// gridWidth * zoom), so this is compared directly against it, no separate
+// unit conversion needed. This used to be the point below which the WHOLE
+// grid was hidden; it is now instead the point below which the grid gets
+// COARSER instead of disappearing (see gridCellLogicalSize) -- Grid ON
+// previously produced no visible difference at ordinary zoom levels (e.g.
+// Public's own 56%, Private's own 514%, both well under 8x) because the
+// grid was simply suppressed there entirely.
 export const GRID_MIN_ZOOM_FOR_DISPLAY = 8;
 
+// The coarse grid never spaces lines further apart than this many logical
+// pixels, so an extremely low zoom still shows SOME grid structure across a
+// reasonably sized document rather than growing the spacing without bound.
+export const GRID_MAX_CELL_SIZE = 128;
+
+// How many logical pixels apart grid lines should be drawn at this zoom:
+// 1 (every logical pixel -- "individual logical pixel boundaries") once
+// zoom is already high enough that doing so stays legible (the resulting
+// on-screen cell is at least minScreenPxPerCell CSS px); otherwise the
+// smallest power-of-two spacing that IS legible at this zoom, capped at
+// maxCellSize. Doubling by powers of two keeps the coarse grid's own cells
+// aligned with common pixel-art block sizes (8x8, 16x16 tiles), not an
+// arbitrary spacing, and the result is always an exact divisor-aligned
+// multiple of the logical pixel grid, so lines never drift off a true pixel
+// boundary.
+export function gridCellLogicalSize(zoom, minScreenPxPerCell = GRID_MIN_ZOOM_FOR_DISPLAY, maxCellSize = GRID_MAX_CELL_SIZE) {
+  let cell = 1;
+  while (cell * zoom < minScreenPxPerCell && cell < maxCellSize) {
+    cell *= 2;
+  }
+  return cell;
+}
+
 // The ONE decision point for whether the pixel-grid overlay should currently
-// be visible: the user's own ON/OFF preference (defaults ON, persisted in
-// localStorage -- see public/pixel-editor.js) always wins when OFF; when ON,
-// the grid is still automatically suppressed below GRID_MIN_ZOOM_FOR_DISPLAY
-// so a zoomed-out view is never swamped with illegible grid noise. The
-// preference itself is never mutated by zooming -- suppressing the grid at
-// low zoom is a temporary rendering decision, not a change to what the user
-// asked for, so zooming back in reveals the grid again without the user
-// having to re-enable it.
-export function shouldShowPixelGrid(zoom, gridPreferenceOn, minZoomForGrid = GRID_MIN_ZOOM_FOR_DISPLAY) {
-  if (!gridPreferenceOn) return false;
-  return zoom >= minZoomForGrid;
+// be visible at all: purely the user's own ON/OFF preference (defaults ON,
+// persisted in localStorage -- see public/pixel-editor.js). Zoom no longer
+// hides the grid outright -- see gridCellLogicalSize, which instead makes it
+// coarser at low zoom so it stays a visible, useful reference at any zoom
+// level rather than disappearing below a threshold.
+export function shouldShowPixelGrid(gridPreferenceOn) {
+  return gridPreferenceOn;
 }
 
 // Decides which editor a page should boot, given the parsed room code (null

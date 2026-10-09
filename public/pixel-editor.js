@@ -44,6 +44,8 @@ import {
   zoomToSliderPosition,
   sliderPositionToZoom,
   GRID_MIN_ZOOM_FOR_DISPLAY,
+  GRID_MAX_CELL_SIZE,
+  gridCellLogicalSize,
   shouldShowPixelGrid,
   resolveEditorMode,
   cellFromClientPoint,
@@ -725,14 +727,17 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   // pattern sized/positioned to match the canvas's own CSS box (never a line
   // per logical pixel, and never iterated per cell), so its cost is O(1)
   // regardless of document size or zoom -- the same technique behind every
-  // "repeating background" grid overlay. shouldShowPixelGrid (pixeldoc.js)
-  // is the one decision point for visibility: the user's own gridPreferenceOn
-  // toggle always wins when OFF; when ON, still auto-suppressed below
-  // GRID_MIN_ZOOM_FOR_DISPLAY so a zoomed-out view never drowns in noise --
-  // suppression never changes gridPreferenceOn itself, so zooming back in
-  // reveals the grid again without re-enabling anything.
+  // "repeating background" grid overlay. shouldShowPixelGrid (pixeldoc.js) is
+  // the one decision point for VISIBILITY: purely gridPreferenceOn now, never
+  // hidden by zoom alone (that previously left Grid ON producing no visible
+  // difference at ordinary zoom levels, e.g. Public's own 56% or Private's
+  // own 514%, both well under the old always-hide-below-8x threshold).
+  // gridCellLogicalSize instead makes the VISIBLE grid coarser at low zoom
+  // (a sparse multiple-logical-pixel spacing) and finer at high zoom
+  // (individual logical pixel boundaries, once that stays legible) --
+  // spacing only, never a reason to hide it outright.
   function updateGridOverlay() {
-    if (!shouldShowPixelGrid(zoom, gridPreferenceOn, GRID_MIN_ZOOM_FOR_DISPLAY)) {
+    if (!shouldShowPixelGrid(gridPreferenceOn)) {
       gridOverlay.hidden = true;
       return;
     }
@@ -741,7 +746,9 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     gridOverlay.style.top = `${canvas.offsetTop}px`;
     gridOverlay.style.width = canvas.style.width;
     gridOverlay.style.height = canvas.style.height;
-    gridOverlay.style.backgroundSize = `${zoom}px ${zoom}px`;
+    const cellSize = gridCellLogicalSize(zoom, GRID_MIN_ZOOM_FOR_DISPLAY, GRID_MAX_CELL_SIZE);
+    const screenCellPx = cellSize * zoom;
+    gridOverlay.style.backgroundSize = `${screenCellPx}px ${screenCellPx}px`;
   }
 
   // Reflects the user's own Grid preference in the Document popover --

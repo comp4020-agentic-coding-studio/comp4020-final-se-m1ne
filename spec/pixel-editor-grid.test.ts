@@ -80,11 +80,6 @@ async function flush() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function fireInput(el: Element, value: string) {
-  (el as HTMLInputElement).value = value;
-  el.dispatchEvent(new Event("input", { bubbles: true }));
-}
-
 function firePointer(el: Element, type: string, props: Partial<PointerEvent>) {
   el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, ...props }));
 }
@@ -145,30 +140,38 @@ describe("Grid toggle", () => {
     expect(localStorage.getItem("pixelGridOn")).toBe("true");
   });
 
-  it("the overlay is hidden below the zoom threshold even with the preference ON, and shown at/above it", () => {
+  it("the grid stays visible at an ordinary LOW zoom when the preference is ON -- the previous bug hid it below 8x entirely", () => {
     const overlay = document.getElementById("pixel-grid-overlay") as HTMLElement;
-    const zoomSlider = document.getElementById("zoom-slider") as HTMLInputElement;
-
-    // 100% is below GRID_MIN_ZOOM_FOR_DISPLAY (8x) -- suppressed regardless
-    // of the ON preference, per the fixed zoom-vs-preference behaviour.
-    fireInput(zoomSlider, zoomSlider.value); // re-fire at whatever Fit/boot already set, forces a sync read
-    expect(overlay.hidden).toBe(true);
-
-    document.getElementById("zoom-in-button")!.dispatchEvent(new Event("click", { bubbles: true }));
-    // Repeated Zoom In clicks (discrete named levels) eventually clear 8x;
-    // Public's own levels include 8 (800%) as the top step.
-    for (let i = 0; i < 10 && overlay.hidden; i++) {
-      document.getElementById("zoom-in-button")!.dispatchEvent(new Event("click", { bubbles: true }));
+    // Zoom OUT via the button -- a direct, synchronous applyZoom call (the
+    // slider/wheel path is deferred to the next animation frame via
+    // scheduleZoom, which a synchronous test like this one never flushes;
+    // firing it here would just leave `hidden` at its last real value and
+    // silently prove nothing).
+    for (let i = 0; i < 10; i++) {
+      document.getElementById("zoom-out-button")!.dispatchEvent(new Event("click", { bubbles: true }));
     }
     expect(overlay.hidden).toBe(false);
   });
 
-  it("turning the preference OFF hides the grid even at a high zoom level that would otherwise show it", () => {
+  it("the grid's line spacing adapts between an ordinary low zoom and a high zoom -- coarser, not hidden, at low zoom", () => {
     const overlay = document.getElementById("pixel-grid-overlay") as HTMLElement;
     for (let i = 0; i < 10; i++) {
+      document.getElementById("zoom-out-button")!.dispatchEvent(new Event("click", { bubbles: true }));
+    }
+    expect(overlay.hidden).toBe(false);
+    const lowZoomBackgroundSize = overlay.style.backgroundSize;
+
+    for (let i = 0; i < 20; i++) {
       document.getElementById("zoom-in-button")!.dispatchEvent(new Event("click", { bubbles: true }));
     }
-    expect(overlay.hidden).toBe(false); // confirms we actually reached a zoom level where it would show
+    expect(overlay.hidden).toBe(false); // still visible -- individual logical pixel boundaries now, not hidden either
+    expect(overlay.style.backgroundSize).not.toBe(lowZoomBackgroundSize);
+  });
+
+  it("turning the preference OFF hides the grid even at a zoom level that would otherwise show it", () => {
+    const overlay = document.getElementById("pixel-grid-overlay") as HTMLElement;
+    document.getElementById("zoom-in-button")!.dispatchEvent(new Event("click", { bubbles: true }));
+    expect(overlay.hidden).toBe(false); // confirms we actually reached a state where it would show
 
     document.getElementById("grid-toggle")!.dispatchEvent(new Event("click", { bubbles: true }));
     expect(overlay.hidden).toBe(true);

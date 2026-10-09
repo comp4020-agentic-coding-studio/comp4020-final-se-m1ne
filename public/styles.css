@@ -430,16 +430,17 @@ body {
 }
 
 #tool-size-number {
-  /* Wide enough for 3 digits (up to "100") WITHOUT truncating or internally
-     scrolling the typed value -- the native spin-button arrows are removed
-     below (not needed: the slider and direct typing already cover
-     stepping), which is what makes a narrow-enough-for-the-rail width still
-     safe: 2.8em of border-box width minus this padding/border leaves ~28px
-     for text, comfortably more than 3 monospace digits at this font-size
-     need. This box plus the side rail's own padding is what keeps the whole
-     rail at/under its ~52px target (60px hard max). */
-  width: 2.8em;
-  padding: 2px 2px;
+  /* Narrowed to fit the rail's own ~44px target (48px hard max), while
+     still fully fitting 3 digits (up to "100") WITHOUT truncating or
+     internally scrolling the typed value -- font-size is left untouched
+     (only width/padding changed), and the native spin-button arrows stay
+     removed below (the slider and direct typing already cover stepping),
+     so every bit of width saved there goes to the digits themselves:
+     2.5em of border-box width minus this (now tighter) padding/border
+     still leaves comfortably more room than 3 monospace digits at this
+     font-size need. */
+  width: 2.6em;
+  padding: 1px 1px;
   border: 1px solid var(--input-border);
   border-radius: var(--radius-sm);
   background: var(--input-bg);
@@ -1129,7 +1130,11 @@ body {
   flex-direction: row;
   align-items: stretch;
   gap: 2px;
-  padding: 8px 1px;
+  /* No horizontal padding at all -- every CSS px here counts against the
+     rail's own ~44px target (48px hard max); #tool-size-number's own width
+     below is the dominant content width, so this stays at (border-right) +
+     (that width) with nothing else added. */
+  padding: 8px 0;
   background: var(--ribbon-bg);
   border-right: 1px solid var(--border);
   overflow-y: auto;
