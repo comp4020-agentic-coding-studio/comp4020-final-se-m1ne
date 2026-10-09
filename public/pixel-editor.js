@@ -33,9 +33,9 @@ import { replayPixelOps, cellsForStroke, cellKey } from "./pixelgrid.js";
 import { cursorDiameterCssPx, fitZoom, stepZoom, clampZoom } from "./viewport.js";
 import {
   MIN_BRUSH_SIZE,
-  PUBLIC_MAX_BRUSH_SIZE,
-  PRIVATE_MAX_BRUSH_SIZE,
+  MAX_BRUSH_SIZE,
   DEFAULT_BRUSH_SIZE,
+  createBrushSizeState,
   PIXEL_ZOOM_MIN,
   PUBLIC_ZOOM_MAX,
   PRIVATE_ZOOM_MAX,
@@ -47,7 +47,6 @@ import {
   cellFromClientPoint,
   buildRenderOps,
   removePendingOp,
-  clampBrushSize,
   cellBoundsForPoints,
   boundsIntersect,
   clampCanvasDimension,
@@ -152,7 +151,10 @@ async function main() {
 
 function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   const isPublicPixelWall = roomCode === null;
-  const maxBrushSize = isPublicPixelWall ? PUBLIC_MAX_BRUSH_SIZE : PRIVATE_MAX_BRUSH_SIZE;
+  // One uniform ceiling for every tool/mode combination -- never a
+  // scope-dependent cap (see server/index.js's/pixeldoc.js's own
+  // MAX_BRUSH_SIZE comments for why 100, not larger).
+  const maxBrushSize = MAX_BRUSH_SIZE;
   const zoomMax = isPublicPixelWall ? PUBLIC_ZOOM_MAX : PRIVATE_ZOOM_MAX;
   const zoomLevels = isPublicPixelWall ? PUBLIC_ZOOM_LEVELS : PRIVATE_ZOOM_LEVELS;
   const opsUrl = isPublicPixelWall ? "/api/pixels" : `/api/rooms/${roomCode}/pixels`;
@@ -196,8 +198,16 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   let myOwnerId = null;
   let allOps = []; // authoritative, server-confirmed pixel ops for this document, in seq order
   let color = "#1d1d1d";
-  let brushSizeCells = DEFAULT_BRUSH_SIZE;
+  // Pencil and Eraser each keep their own independently-remembered size (the
+  // C8 freehand editor's own toolSizes behaviour, restored here) -- ONE
+  // shared slider/numeric input, but switching tools never overwrites the
+  // other tool's stored value. See pixeldoc.js's createBrushSizeState.
+  const toolSizes = createBrushSizeState(maxBrushSize, DEFAULT_BRUSH_SIZE);
   let mode = "brush"; // "brush" | "eraser" | "eyedropper"
+
+  function activeToolSize() {
+    return toolSizes.get(mode === "eraser" ? "eraser" : "brush");
+  }
 
   // The gesture currently being dragged, and gestures finished locally but
   // not yet confirmed by the server -- exactly public/app.js's own
@@ -405,7 +415,11 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
 
   function beginGesture(kind, cell) {
     if (myOwnerId === null) return;
-    current = { kind, color: kind === "erase" ? null : color, size: brushSizeCells, points: [cell] };
+    // size is whichever tool `kind` corresponds to's own independently
+    // remembered size -- NOT always the Pencil's, which was the regression:
+    // an erase gesture must use the Eraser's own stored size, never the
+    // Pencil's, even though they share one on-screen slider.
+    current = { kind, color: kind === "erase" ? null : color, size: activeToolSize(), points: [cell] };
     currentLastRenderedIndex = 0;
     renderCurrentDelta(); // immediate feedback for the very first point -- never waits on a queued frame
     updateUndoRedoButtons(); // a gesture just became pending -- disable until it resolves
@@ -556,18 +570,23 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   canvas.addEventListener("pointercancel", endPointerAction);
 
   // --- Tools / size --------------------------------------------------------
-  // One shared range for Brush and Eraser alike -- unlike the freehand
-  // engine's two different per-tool ranges, pixel brush/eraser sizes mean the
-  // exact same thing (public/pixelgrid.js's PixelOp.size). The range itself
-  // is scope-dependent (Public keeps its original 1-8 ceiling; a Private
-  // studio supports the full 1-64 professional range, regardless of that
-  // studio's own width/height) -- never a scaling rule derived from canvas
-  // size. A direct numeric input is shown alongside the slider (not instead
-  // of the freehand engine's own read-only #tool-size-value output, which
-  // stays untouched for public/app.js).
+  // One shared range for Brush and Eraser alike -- the uniform 1-100 ceiling
+  // (public/pixeldoc.js's MAX_BRUSH_SIZE), identical for Public and Private,
+  // never a scaling rule derived from canvas size. ONE shared slider and ONE
+  // shared numeric input control whichever tool is currently active, but
+  // Pencil and Eraser each keep their own independently-remembered size
+  // underneath (toolSizes, above) -- restoring the C8 freehand editor's own
+  // per-tool independence. A direct numeric input is shown alongside the
+  // slider (not instead of the freehand engine's own read-only
+  // #tool-size-value output, which stays untouched for public/app.js).
   toolSizeValue.hidden = true;
   toolSizeNumber.hidden = false;
 
+  // Applies the active tool's own remembered size to the one shared
+  // slider/number -- called on every tool switch so neither ever shows (or
+  // silently inherits) the OTHER tool's value. Eyedropper has no size of its
+  // own: the control is simply disabled, leaving whichever size was last
+  // shown visible but inert underneath, exactly like the C8 freehand editor.
   function syncSizeControlToMode() {
     if (mode === "eyedropper") {
       toolSizeSlider.disabled = true;
@@ -579,10 +598,11 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     toolSizeSlider.min = String(MIN_BRUSH_SIZE);
     toolSizeSlider.max = String(maxBrushSize);
     toolSizeSlider.step = "1";
-    toolSizeSlider.value = String(brushSizeCells);
     toolSizeNumber.min = String(MIN_BRUSH_SIZE);
     toolSizeNumber.max = String(maxBrushSize);
-    toolSizeNumber.value = String(brushSizeCells);
+    const size = activeToolSize();
+    toolSizeSlider.value = String(size);
+    toolSizeNumber.value = String(size);
   }
 
   function updateCursorSize() {
@@ -591,7 +611,7 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     // brush's own on-canvas diameter in "document px" is just its cell
     // count -- cursorDiameterCssPx (viewport.js, unchanged) only needs that
     // scaled by the current zoom, exactly as it already does for freehand.
-    const diameter = cursorDiameterCssPx(brushSizeCells, zoom);
+    const diameter = cursorDiameterCssPx(activeToolSize(), zoom);
     toolCursor.style.width = `${diameter}px`;
     toolCursor.style.height = `${diameter}px`;
   }
@@ -606,7 +626,7 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     toolEyedropperButton.setAttribute("aria-pressed", String(mode === "eyedropper"));
     canvas.style.cursor = mode === "eyedropper" ? "crosshair" : "none";
     if (mode === "eyedropper") toolCursor.style.display = "none";
-    syncSizeControlToMode();
+    syncSizeControlToMode(); // restores THIS tool's own stored size to the shared slider/number
     updateCursorSize();
     colourGroup.classList.toggle("colour-controls-dimmed", mode === "eraser");
   }
@@ -615,14 +635,17 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   toolEraserButton.addEventListener("click", () => setMode("eraser"));
   toolEyedropperButton.addEventListener("click", () => setMode("eyedropper"));
 
-  function setBrushSize(rawValue) {
-    brushSizeCells = clampBrushSize(Number(rawValue), maxBrushSize);
-    toolSizeSlider.value = String(brushSizeCells);
-    toolSizeNumber.value = String(brushSizeCells);
+  // Writes only to the CURRENTLY ACTIVE tool's own stored size -- the
+  // inactive tool's size is never touched by this, however many times the
+  // slider/number fire while this tool stays selected.
+  function setToolSize(rawValue) {
+    const clamped = toolSizes.set(mode === "eraser" ? "eraser" : "brush", rawValue);
+    toolSizeSlider.value = String(clamped);
+    toolSizeNumber.value = String(clamped);
     updateCursorSize();
   }
-  toolSizeSlider.addEventListener("input", () => setBrushSize(toolSizeSlider.value));
-  toolSizeNumber.addEventListener("input", () => setBrushSize(toolSizeNumber.value));
+  toolSizeSlider.addEventListener("input", () => setToolSize(toolSizeSlider.value));
+  toolSizeNumber.addEventListener("input", () => setToolSize(toolSizeNumber.value));
 
   canvas.addEventListener("pointerenter", (event) => {
     if (mode === "eyedropper") return;
@@ -801,6 +824,26 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     location.href = "/";
   }
 
+  // The shared Procreate/Pixquare-inspired editor shell: ONE DOM layout,
+  // top toolbar, left control rail, canvas workspace, and status bar, used
+  // identically by Public and every Private studio -- never two separately
+  // designed interfaces. #tool-ribbon (Tools/Size/Colours) stays a compact
+  // top toolbar via .studio-layout's own CSS; only the brush-size slider and
+  // its direct numeric input -- #size-group's own `.size-control` wrapper
+  // div, moved whole via appendChild (which MOVES a node, keeping its id,
+  // markup, and every already-wired listener) -- relocate to the canvas's
+  // own left edge (#studio-side-rail), next to the reserved, genuinely-
+  // disabled Opacity slot already in the markup. #size-group itself is left
+  // behind empty (its "Size" label has no content to label in a slim top
+  // toolbar), so it's hidden rather than shown as a stray empty group.
+  // Applied unconditionally (both Public and Private): mode-specific
+  // differences are controlled below by explicit Public/Private state
+  // (room navigation, document settings), never by duplicating this shell.
+  workspace.classList.add("studio-layout");
+  studioSideRail.hidden = false;
+  sideRailBrushSize.appendChild(sizeGroup.querySelector(".size-control"));
+  sizeGroup.hidden = true;
+
   if (isPublicPixelWall) {
     // The New Canvas dialog: independent width/height and a background
     // choice, confirmed before anything is created -- not a permanently-
@@ -868,33 +911,18 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     publicRoomControls.hidden = true;
     privateRoomControls.hidden = false;
 
-    // The Procreate/Pixquare-inspired studio layout, for every Private
-    // pixel-art room. Primary tools/colours stay in the existing compact
-    // top #tool-ribbon (styles.css's .studio-layout rules just slim it
-    // down); only the brush-size slider and its direct numeric input --
-    // #size-group's own `.size-control` wrapper div, moved whole via
-    // appendChild (which MOVES a node, keeping its id, markup, and every
-    // already-wired listener) -- relocate to the canvas's own left edge
-    // (#studio-side-rail), next to the reserved, genuinely-disabled Opacity
-    // slot already in the markup. #size-group itself is left behind empty
-    // (its "Size" label has no content to label in a slim top toolbar), so
-    // it's hidden rather than shown as a stray empty group. Nothing here is
-    // a second copy of any control.
-    workspace.classList.add("studio-layout");
-    studioSideRail.hidden = false;
-    sideRailBrushSize.appendChild(sizeGroup.querySelector(".size-control"));
-    sizeGroup.hidden = true;
-
-    // Room code, background control, and Leave relocate the same way into
-    // #document-settings-popover, reached through the compact
-    // #document-settings-button that replaces them in the session bar --
-    // not a full-width persistent row. #private-room-controls itself stays
-    // visible (it now contains only that button).
+    // Room code and background control relocate into #document-settings-
+    // popover, reached through the compact #document-settings-button --
+    // not a full-width persistent row. #back-to-public is deliberately NOT
+    // relocated: it stays exactly where the markup already has it, a direct
+    // sibling of #document-settings-button inside #private-room-controls,
+    // so it remains visible in the header without opening anything -- a
+    // directly-visible Back to Public control is mandatory, never exclusive
+    // to the Document popover.
     documentSettingsButton.hidden = false;
     documentSettingsBody.appendChild(roomCodeLabel);
     documentSettingsBody.appendChild(roomBackgroundControl);
     documentSettingsBody.appendChild(roomBackgroundColourInput);
-    documentSettingsBody.appendChild(backToPublicLink);
 
     function openDocumentSettingsPopover() {
       const rect = documentSettingsButton.getBoundingClientRect();

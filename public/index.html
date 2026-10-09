@@ -146,7 +146,7 @@
           <span class="group-label">Size</span>
           <div class="group-controls">
             <div class="size-control">
-              <input type="range" id="tool-size-slider" min="1" max="40" value="6" step="1" />
+              <input type="range" id="tool-size-slider" min="1" max="100" value="6" step="1" />
               <output id="tool-size-value" for="tool-size-slider">6px</output>
               <!-- Pixel mode's own direct numeric input, alongside (not
                    instead of) the slider -- public/app.js's #tool-size-value
@@ -156,7 +156,7 @@
                 type="number"
                 id="tool-size-number"
                 min="1"
-                max="64"
+                max="100"
                 step="1"
                 value="2"
                 aria-label="Brush size in pixels"
@@ -347,11 +347,11 @@
       <div id="room-create-popover-body">
         <div class="new-canvas-field">
           <label for="new-canvas-width">Width</label>
-          <input type="number" id="new-canvas-width" min="16" max="512" step="1" value="128" />
+          <input type="number" id="new-canvas-width" min="16" max="2048" step="1" value="128" />
         </div>
         <div class="new-canvas-field">
           <label for="new-canvas-height">Height</label>
-          <input type="number" id="new-canvas-height" min="16" max="512" step="1" value="128" />
+          <input type="number" id="new-canvas-height" min="16" max="2048" step="1" value="128" />
         </div>
         <div class="new-canvas-field">
           <label for="new-canvas-background">Background</label>

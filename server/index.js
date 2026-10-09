@@ -190,14 +190,17 @@ const PUBLIC_PIXEL_HEIGHT = 1152;
 // New Canvas dialog now primarily sends independent width/height instead.
 const PIXEL_RESOLUTIONS = [32, 64, 128, 256];
 const MIN_CANVAS_DIMENSION = 16;
-const MAX_CANVAS_DIMENSION = 512;
+// See public/pixeldoc.js's own MAX_CANVAS_DIMENSION comment for why this is
+// 2048, not an arbitrarily larger value: the current renderer is one single,
+// dense (never tiled/virtualized) <canvas> sized exactly to the document, so
+// its native bitmap memory is unavoidably width*height*4 bytes.
+const MAX_CANVAS_DIMENSION = 2048;
 const MIN_BRUSH_SIZE = 1;
-// Public keeps its original, smaller ceiling; a Private pixel-art studio
-// supports the full professional range. This is a flat limit, never derived
-// from (or scaled by) that document's own width/height -- a 16x16 studio
-// permits the same 1-64 range as a 512x512 one.
-const PUBLIC_MAX_BRUSH_SIZE = 8;
-const PRIVATE_MAX_BRUSH_SIZE = 64;
+// One uniform ceiling for every tool/mode combination -- Public and Private
+// Pencil/Eraser all share this flat limit, never derived from (or scaled by)
+// that document's own width/height -- a 16x16 studio permits the same 1-100
+// range as a 2048x2048 one.
+const MAX_BRUSH_SIZE = 100;
 const BACKGROUND_KINDS = ["transparent", "white", "custom"];
 
 function isFiniteInt(value) {
@@ -520,10 +523,10 @@ app.get("/api/pixels/stream", (req, res) => {
 });
 
 app.post("/api/pixels/draw", (req, res) =>
-  handlePixelDraw(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT, PUBLIC_MAX_BRUSH_SIZE),
+  handlePixelDraw(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT, MAX_BRUSH_SIZE),
 );
 app.post("/api/pixels/erase", (req, res) =>
-  handlePixelErase(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT, PUBLIC_MAX_BRUSH_SIZE),
+  handlePixelErase(req, res, null, PUBLIC_PIXEL_WIDTH, PUBLIC_PIXEL_HEIGHT, MAX_BRUSH_SIZE),
 );
 
 app.post("/api/pixels/cursor", (req, res) =>
@@ -796,7 +799,7 @@ app.post("/api/rooms/:code/pixels/draw", (req, res) => {
     res.status(400).json({ error: "this room is a legacy freehand room; use /api/rooms/:code/ops/draw" });
     return;
   }
-  handlePixelDraw(req, res, code, room.width, room.height, PRIVATE_MAX_BRUSH_SIZE);
+  handlePixelDraw(req, res, code, room.width, room.height, MAX_BRUSH_SIZE);
 });
 
 app.post("/api/rooms/:code/pixels/erase", (req, res) => {
@@ -810,7 +813,7 @@ app.post("/api/rooms/:code/pixels/erase", (req, res) => {
     res.status(400).json({ error: "this room is a legacy freehand room; use /api/rooms/:code/ops/erase" });
     return;
   }
-  handlePixelErase(req, res, code, room.width, room.height, PRIVATE_MAX_BRUSH_SIZE);
+  handlePixelErase(req, res, code, room.width, room.height, MAX_BRUSH_SIZE);
 });
 
 app.post("/api/rooms/:code/pixels/undo", (req, res) => {

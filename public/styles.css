@@ -943,19 +943,25 @@ body {
   gap: 8px;
 }
 
-/* --- Pixquare/Procreate-inspired Private studio layout -----------------------
-   Applied only when public/pixel-editor.js adds .studio-layout to #workspace
-   (a Private pixel-art room; never Public, never a legacy freehand page).
-   Primary tools stay in a compact top toolbar (the existing #tool-ribbon,
-   restyled slimmer here, not replaced); brush size moves to a compact
-   vertical control at the canvas's own left edge (#studio-side-rail), next to
-   a reserved (disabled, non-functional) Opacity slot; the canvas fills
-   whatever's left. No permanent page-height side panels -- the earlier
-   left-rail/right-panel layout this replaces made Tools/Document/Brush/
-   Colour each a full-width row, which is exactly the "broken, not a coherent
-   editor" look this corrects. Every control below is the exact same element
-   (#tool-group, #size-group, #colour-group, #room-code-label, etc.) app.js
-   and Public pixel mode already use -- relocated by JS, never duplicated. */
+/* --- Pixquare/Procreate-inspired shared editor shell -------------------------
+   Applied unconditionally by public/pixel-editor.js (.studio-layout on
+   #workspace) for BOTH the Public pixel wall and every Private pixel-art
+   room -- one shared shell, never two separately designed interfaces (never
+   applied to a legacy freehand page, which loads public/app.js instead and
+   never touches this file's own pixel-editor.js code at all). Primary tools
+   stay in a compact top toolbar (the existing #tool-ribbon, restyled slimmer
+   here, not replaced); brush size moves to a compact vertical control at the
+   canvas's own left edge (#studio-side-rail), next to a reserved (disabled,
+   non-functional) Opacity slot; the canvas fills whatever's left. No
+   permanent page-height side panels -- the earlier left-rail/right-panel
+   layout this replaces made Tools/Document/Brush/Colour each a full-width
+   row, which is exactly the "broken, not a coherent editor" look this
+   corrects. Every control below is the exact same element (#tool-group,
+   #size-group, #colour-group, #room-code-label, etc.) Public and Private
+   both already use -- relocated by JS, never duplicated. Public/Private
+   differences (room navigation, the Document popover) are layered on top of
+   this identical shell by pixel-editor.js's own Public/Private branch,
+   never by a second shell. */
 
 .studio-layout #tool-ribbon {
   padding: 4px 10px;
@@ -1117,12 +1123,13 @@ body {
   gap: 8px;
 }
 
-/* The relocated #room-code-label/#room-background-control/#back-to-public
-   read as rows inside this popover instead of inline session-bar chrome --
-   same elements, only the surrounding presentation differs. */
+/* The relocated #room-code-label/#room-background-control read as rows
+   inside this popover instead of inline session-bar chrome -- same
+   elements, only the surrounding presentation differs. #back-to-public is
+   NOT relocated here (see public/pixel-editor.js) -- it stays directly
+   visible in the session bar, so there is no rule for it in this popover. */
 #document-settings-body #room-code-label,
-#document-settings-body #room-background-control,
-#document-settings-body #back-to-public {
+#document-settings-body #room-background-control {
   width: 100%;
 }
 
@@ -1130,12 +1137,6 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-
-#document-settings-body #back-to-public {
-  display: block;
-  text-align: center;
-  margin-top: 4px;
 }
 
 /* --- Continuous zoom slider ---------------------------------------------------

@@ -7,20 +7,22 @@ import {
   cellFromClientPoint,
   clampBrushSize,
   clampCanvasDimension,
+  createBrushSizeState,
   DEFAULT_BACKGROUND_COLOR,
+  DEFAULT_BRUSH_SIZE,
   DEFAULT_CANVAS_SIZE,
   DEFAULT_PIXEL_RESOLUTION,
   isValidBackgroundKind,
   isValidPixelResolution,
+  MAX_BRUSH_SIZE,
   MAX_CANVAS_DIMENSION,
+  MIN_BRUSH_SIZE,
   MIN_CANVAS_DIMENSION,
   nextSyntheticSeq,
   PIXEL_RESOLUTIONS,
   PIXEL_ZOOM_MIN,
-  PRIVATE_MAX_BRUSH_SIZE,
   PRIVATE_ZOOM_LEVELS,
   PRIVATE_ZOOM_MAX,
-  PUBLIC_MAX_BRUSH_SIZE,
   PUBLIC_PIXEL_HEIGHT,
   PUBLIC_PIXEL_WIDTH,
   PUBLIC_ZOOM_LEVELS,
@@ -93,32 +95,84 @@ describe("pixel resolution handling", () => {
 });
 
 // --- Tool behaviour: brush size ------------------------------------------------
+// MAX_BRUSH_SIZE is a single uniform ceiling now -- Public Pencil, Public
+// Eraser, Private Pencil, and Private Eraser all share exactly the same
+// 1-100 range, never a scope-dependent cap.
 
 describe("clampBrushSize", () => {
-  it("passes through any already-valid integer within Public's 1-8 range unchanged", () => {
-    for (let size = 1; size <= PUBLIC_MAX_BRUSH_SIZE; size++) expect(clampBrushSize(size, PUBLIC_MAX_BRUSH_SIZE)).toBe(size);
+  it("MAX_BRUSH_SIZE is 100, uniform for every tool/mode combination", () => {
+    expect(MAX_BRUSH_SIZE).toBe(100);
   });
 
-  it("passes through any already-valid integer within Private's full 1-64 range unchanged, never arbitrarily narrowed", () => {
-    for (const size of [1, 2, 8, 9, 32, 63, 64]) expect(clampBrushSize(size, PRIVATE_MAX_BRUSH_SIZE)).toBe(size);
+  it("passes through any already-valid integer within the full 1-100 range unchanged, never arbitrarily narrowed", () => {
+    for (const size of [1, 2, 8, 9, 32, 63, 64, 65, 99, 100]) expect(clampBrushSize(size, MAX_BRUSH_SIZE)).toBe(size);
   });
 
-  it("clamps below the minimum and above each scope's own maximum", () => {
-    expect(clampBrushSize(0, PUBLIC_MAX_BRUSH_SIZE)).toBe(1);
-    expect(clampBrushSize(-5, PRIVATE_MAX_BRUSH_SIZE)).toBe(1);
-    expect(clampBrushSize(9, PUBLIC_MAX_BRUSH_SIZE)).toBe(PUBLIC_MAX_BRUSH_SIZE);
-    expect(clampBrushSize(65, PRIVATE_MAX_BRUSH_SIZE)).toBe(PRIVATE_MAX_BRUSH_SIZE);
-    expect(clampBrushSize(999, PRIVATE_MAX_BRUSH_SIZE)).toBe(PRIVATE_MAX_BRUSH_SIZE);
+  it("clamps below the minimum and above the maximum", () => {
+    expect(clampBrushSize(0, MAX_BRUSH_SIZE)).toBe(1);
+    expect(clampBrushSize(-5, MAX_BRUSH_SIZE)).toBe(1);
+    expect(clampBrushSize(101, MAX_BRUSH_SIZE)).toBe(MAX_BRUSH_SIZE);
+    expect(clampBrushSize(999, MAX_BRUSH_SIZE)).toBe(MAX_BRUSH_SIZE);
   });
 
   it("rounds a fractional size to the nearest integer before clamping", () => {
-    expect(clampBrushSize(3.4, PRIVATE_MAX_BRUSH_SIZE)).toBe(3);
-    expect(clampBrushSize(3.6, PRIVATE_MAX_BRUSH_SIZE)).toBe(4);
+    expect(clampBrushSize(3.4, MAX_BRUSH_SIZE)).toBe(3);
+    expect(clampBrushSize(3.6, MAX_BRUSH_SIZE)).toBe(4);
   });
 
   it("falls back to the default (or the scope's own max, if smaller) for a non-finite input rather than propagating NaN", () => {
-    expect(clampBrushSize(NaN, PRIVATE_MAX_BRUSH_SIZE)).toBe(2);
-    expect(clampBrushSize(Infinity, PRIVATE_MAX_BRUSH_SIZE)).toBe(2);
+    expect(clampBrushSize(NaN, MAX_BRUSH_SIZE)).toBe(2);
+    expect(clampBrushSize(Infinity, MAX_BRUSH_SIZE)).toBe(2);
+  });
+});
+
+// --- Tool behaviour: independent Pencil/Eraser size state ----------------------
+// This is the exact state machine public/pixel-editor.js uses underneath its
+// one shared slider/numeric input -- not a parallel reimplementation -- so
+// these tests directly cover the regression fix: Pencil and Eraser must each
+// keep their own remembered size, never overwriting the other's.
+
+describe("createBrushSizeState", () => {
+  it("both tools start at the same clamped default", () => {
+    const state = createBrushSizeState(MAX_BRUSH_SIZE, DEFAULT_BRUSH_SIZE);
+    expect(state.get("brush")).toBe(DEFAULT_BRUSH_SIZE);
+    expect(state.get("eraser")).toBe(DEFAULT_BRUSH_SIZE);
+  });
+
+  it("setting one tool's size never changes the other tool's stored size", () => {
+    const state = createBrushSizeState(MAX_BRUSH_SIZE);
+    state.set("brush", 5);
+    state.set("eraser", 8);
+    expect(state.get("brush")).toBe(5);
+    expect(state.get("eraser")).toBe(8);
+
+    // Switching back and forth repeatedly must never cross-contaminate.
+    state.set("brush", 12);
+    expect(state.get("eraser")).toBe(8);
+    state.set("eraser", 40);
+    expect(state.get("brush")).toBe(12);
+  });
+
+  it("the full example from the spec: Pencil 5, Eraser 8, survives switching back and forth", () => {
+    const state = createBrushSizeState(MAX_BRUSH_SIZE);
+    state.set("brush", 5);
+    state.set("eraser", 8);
+    expect(state.get("brush")).toBe(5);
+    expect(state.get("eraser")).toBe(8);
+  });
+
+  it("set() clamps and rounds exactly like clampBrushSize, returning the clamped value", () => {
+    const state = createBrushSizeState(MAX_BRUSH_SIZE);
+    expect(state.set("brush", "101")).toBe(MAX_BRUSH_SIZE);
+    expect(state.get("brush")).toBe(MAX_BRUSH_SIZE);
+    expect(state.set("eraser", 0)).toBe(MIN_BRUSH_SIZE);
+    expect(state.set("eraser", 3.6)).toBe(4);
+  });
+
+  it("the constructed default itself is clamped to maxSize", () => {
+    const state = createBrushSizeState(50, 999);
+    expect(state.get("brush")).toBe(50);
+    expect(state.get("eraser")).toBe(50);
   });
 });
 
@@ -267,14 +321,21 @@ describe("zoomToSliderPosition / sliderPositionToZoom", () => {
 // --- New Canvas dialog: independent width/height + background -------------
 
 describe("clampCanvasDimension", () => {
-  it("passes through any already-valid integer in [16, 512] unchanged", () => {
-    for (const n of [16, 64, 128, 300, 512]) expect(clampCanvasDimension(n)).toBe(n);
+  it("MIN/MAX_CANVAS_DIMENSION are 16 and 2048", () => {
+    expect(MIN_CANVAS_DIMENSION).toBe(16);
+    expect(MAX_CANVAS_DIMENSION).toBe(2048);
+  });
+
+  it("passes through any already-valid integer in [16, 2048] unchanged", () => {
+    for (const n of [16, 64, 128, 300, 1024, 2048]) expect(clampCanvasDimension(n)).toBe(n);
   });
 
   it("clamps below the minimum and above the maximum", () => {
     expect(clampCanvasDimension(0)).toBe(MIN_CANVAS_DIMENSION);
     expect(clampCanvasDimension(-50)).toBe(MIN_CANVAS_DIMENSION);
+    expect(clampCanvasDimension(2049)).toBe(MAX_CANVAS_DIMENSION);
     expect(clampCanvasDimension(9999)).toBe(MAX_CANVAS_DIMENSION);
+    expect(clampCanvasDimension(10000)).toBe(MAX_CANVAS_DIMENSION); // the requested 10000x10000 is clamped, not silently honoured
   });
 
   it("rounds a fractional size and falls back to the default for non-numeric input", () => {
@@ -285,8 +346,8 @@ describe("clampCanvasDimension", () => {
 
   it("supports rectangular canvases: width and height are validated independently", () => {
     expect(clampCanvasDimension(16)).toBe(16);
-    expect(clampCanvasDimension(512)).toBe(512);
-    // A caller choosing 16 for width and 512 for height gets both verbatim --
+    expect(clampCanvasDimension(2048)).toBe(2048);
+    // A caller choosing 16 for width and 2048 for height gets both verbatim --
     // neither dimension constrains or derives from the other.
   });
 });

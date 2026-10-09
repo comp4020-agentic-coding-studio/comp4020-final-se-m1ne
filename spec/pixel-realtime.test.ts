@@ -344,7 +344,7 @@ describe("op/undo/redo broadcast", () => {
 
     const badSize = await postJson(`/api/rooms/${code}/pixels/draw`, {
       color: "#1d1d1d",
-      size: 99,
+      size: 101,
       points: [{ x: 1, y: 1 }],
     });
     expect(badSize.status).toBe(400);

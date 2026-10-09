@@ -80,11 +80,36 @@ describe("bresenhamLine (gap-free integer interpolation)", () => {
 });
 
 describe("cellsForStroke (rasterization used identically by live preview and full replay)", () => {
-  it("a single point stamps exactly that point's brush footprint, for every supported brush size", () => {
-    for (const size of [1, 2, 3, 4, 5, 8]) {
-      const cells = cellsForStroke([{ x: 10, y: 10 }], size, 64, 64);
-      expect(keysOf(cells)).toEqual(keysOf(brushStamp(10, 10, size)));
+  it("a single point stamps exactly that point's brush footprint, for every supported brush size, up to the new 100 ceiling", () => {
+    // (128,128) in a 256x256 document is far enough from every edge (>=50
+    // cells) that even the widest supported brush (100) never gets clipped,
+    // so the unclipped brushStamp footprint and cellsForStroke's own output
+    // must match exactly.
+    for (const size of [1, 2, 3, 4, 5, 8, 64, 100]) {
+      const cells = cellsForStroke([{ x: 128, y: 128 }], size, 256, 256);
+      expect(keysOf(cells)).toEqual(keysOf(brushStamp(128, 128, size)));
     }
+  });
+
+  it("a size-100 brush clips correctly at a document edge and interpolates a fast stroke with no gaps", () => {
+    // Centered at (0,0) in a 256x256 document, a 100-wide brush (start
+    // offset -floor(99/2) = -49) spans x,y in [-49, 50] inclusive -- the
+    // in-bounds portion is x,y in [0, 50], 51 values per axis -- clipped,
+    // never wrapped.
+    const atCorner = cellsForStroke([{ x: 0, y: 0 }], 100, 256, 256);
+    expect(atCorner.length).toBe(51 * 51); // only the in-bounds quadrant survives
+    for (const c of atCorner) {
+      expect(c.x).toBeGreaterThanOrEqual(0);
+      expect(c.y).toBeGreaterThanOrEqual(0);
+      expect(c.x).toBeLessThan(256);
+      expect(c.y).toBeLessThan(256);
+    }
+
+    // A fast drag with a size-100 brush must still connect every column
+    // between the two sampled points, not just stamp the endpoints.
+    const stroke = cellsForStroke([{ x: 20, y: 128 }, { x: 220, y: 128 }], 100, 256, 256);
+    const xs = new Set(stroke.map((c) => c.x));
+    for (let x = 0; x <= 255; x++) expect(xs.has(x)).toBe(true);
   });
 
   it("a fast horizontal drag (samples several cells apart) leaves no gaps", () => {

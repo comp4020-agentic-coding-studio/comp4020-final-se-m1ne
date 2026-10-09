@@ -19,14 +19,13 @@ export const PUBLIC_PIXEL_HEIGHT = 1152;
 export const PIXEL_RESOLUTIONS = [32, 64, 128, 256];
 export const DEFAULT_PIXEL_RESOLUTION = 128;
 
-// Public keeps its original, smaller ceiling; a Private pixel-art studio
-// supports the full professional range, 1-64, regardless of that studio's
-// own (possibly much smaller) width/height -- never a scaling rule derived
-// from canvas size. Kept in sync by hand with server/index.js's own
-// PUBLIC_MAX_BRUSH_SIZE/PRIVATE_MAX_BRUSH_SIZE.
+// One uniform range for every tool/mode combination -- Public Pencil,
+// Public Eraser, Private Pencil, Private Eraser all share the exact same
+// 1-100 ceiling, never a scope-dependent cap, and never a rule derived from
+// a document's own width/height. Kept in sync by hand with server/index.js's
+// own MAX_BRUSH_SIZE.
 export const MIN_BRUSH_SIZE = 1;
-export const PUBLIC_MAX_BRUSH_SIZE = 8;
-export const PRIVATE_MAX_BRUSH_SIZE = 64;
+export const MAX_BRUSH_SIZE = 100;
 export const DEFAULT_BRUSH_SIZE = 2;
 
 // New Canvas dialog: independent, directly-editable width/height (a
@@ -34,8 +33,28 @@ export const DEFAULT_BRUSH_SIZE = 2;
 // PIXEL_RESOLUTIONS enum above, which POST /api/rooms still accepts
 // unchanged for backward compatibility). Kept in sync by hand with
 // server/index.js's own MIN_CANVAS_DIMENSION/MAX_CANVAS_DIMENSION.
+//
+// 2048 (not the requested 10000) is the highest limit defensible under the
+// CURRENT renderer architecture: #canvas's backing store is one single,
+// dense <canvas> sized exactly gridWidth x gridHeight (never tiled or
+// virtualized), so its native bitmap memory is unavoidably width*height*4
+// bytes, regardless of how sparse the actual artwork is (committedGrid, the
+// JS-side cache, IS already a Map keyed by painted cell, costing nothing for
+// a blank one). A 10000x10000 document would need a ~381 MiB backing store
+// for that bitmap alone -- several times the ~16.7 million px (4096x4096)
+// area historically documented as the point older/mobile WebKit builds can
+// refuse or fail a single canvas at, and enough to risk a slow full-canvas
+// clearRect (renderFromCommittedGrid's own full-repaint path, run at load/
+// undo/redo/gesture-resolve boundaries) or an out-of-memory tab kill on a
+// constrained device. 2048x2048 (~16 MiB) keeps a 4x margin below that
+// documented ceiling, and reuses the exact scale Public's own 2048x1152
+// document (~9.4 MiB) already ships and has been exercised at. Supporting
+// 10000x10000 safely would need a tiled/virtualized canvas renderer --
+// splitting the document into multiple smaller canvases, or rendering only
+// the current viewport -- which is a substantial renderer rewrite out of
+// scope for this change.
 export const MIN_CANVAS_DIMENSION = 16;
-export const MAX_CANVAS_DIMENSION = 512;
+export const MAX_CANVAS_DIMENSION = 2048;
 export const DEFAULT_CANVAS_SIZE = 128;
 
 // Document background: metadata about how a pixel-art studio's canvas is
@@ -127,13 +146,36 @@ export function isValidPixelResolution(value) {
   return PIXEL_RESOLUTIONS.includes(value);
 }
 
-// maxSize is the caller's own scope ceiling (PUBLIC_MAX_BRUSH_SIZE or
-// PRIVATE_MAX_BRUSH_SIZE) -- never derived here from a document's own
-// dimensions.
+// maxSize is the caller's own ceiling (MAX_BRUSH_SIZE) -- never derived here
+// from a document's own dimensions.
 export function clampBrushSize(size, maxSize) {
   const n = Math.round(size);
   if (!Number.isFinite(n)) return Math.min(DEFAULT_BRUSH_SIZE, maxSize);
   return Math.min(maxSize, Math.max(MIN_BRUSH_SIZE, n));
+}
+
+// Pencil and Eraser each keep their OWN selected size -- restoring the exact
+// independence the original C8 freehand editor had (public/app.js's own
+// toolSizes map, one entry per tool with its own get/set) against ONE shared
+// slider/numeric input: the widget is shared, the state underneath it is
+// not. A tool switch never touches the other tool's stored size; setting one
+// tool's size never touches the other's. This is a factory, not a singleton,
+// specifically so it is this exact state machine (not a parallel
+// reimplementation) that both public/pixel-editor.js and this module's own
+// tests exercise.
+export function createBrushSizeState(maxSize, defaultSize = DEFAULT_BRUSH_SIZE) {
+  const clampedDefault = clampBrushSize(defaultSize, maxSize);
+  const sizes = { brush: clampedDefault, eraser: clampedDefault };
+  return {
+    get(tool) {
+      return sizes[tool];
+    },
+    set(tool, value) {
+      const clamped = clampBrushSize(Number(value), maxSize);
+      sizes[tool] = clamped;
+      return clamped;
+    },
+  };
 }
 
 // Live-clamps a New Canvas dialog width/height field as the user types --

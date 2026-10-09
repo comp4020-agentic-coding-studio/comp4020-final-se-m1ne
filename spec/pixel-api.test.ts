@@ -82,8 +82,8 @@ it("creating a Private room with independent width/height supports a rectangular
   expect(fetched.body).toMatchObject({ width: 64, height: 256, background: { kind: "white", color: null } });
 });
 
-it("creating a Private room at each dimension boundary (16 and 512) succeeds", async () => {
-  for (const dim of [16, 512]) {
+it("creating a Private room at each dimension boundary (16 and 2048) succeeds", async () => {
+  for (const dim of [16, 2048]) {
     const created = await postJson("/api/rooms", { width: dim, height: dim });
     expect(created.status).toBe(201);
     expect(created.body).toMatchObject({ width: dim, height: dim });
@@ -91,11 +91,20 @@ it("creating a Private room at each dimension boundary (16 and 512) succeeds", a
 });
 
 it("creating a Private room with an out-of-range or non-integer width/height is rejected (400)", async () => {
-  for (const bad of [15, 513, 0, -1, 64.5, "64", null]) {
+  for (const bad of [15, 2049, 0, -1, 64.5, "64", null]) {
     const res = await postJson("/api/rooms", { width: bad, height: 128 });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/width and height must each be an integer/);
   }
+});
+
+it("a width one pixel above the maximum is rejected while the maximum itself is accepted (exact boundary)", async () => {
+  const atMax = await postJson("/api/rooms", { width: 2048, height: 16 });
+  expect(atMax.status).toBe(201);
+  const overMax = await postJson("/api/rooms", { width: 2049, height: 16 });
+  expect(overMax.status).toBe(400);
+  const heightOverMax = await postJson("/api/rooms", { width: 16, height: 2049 });
+  expect(heightOverMax.status).toBe(400);
 });
 
 it("creating a Private room with an explicit background persists it", async () => {
@@ -202,7 +211,7 @@ it("a legacy room rejects the pixel-mode routes (400), and a pixel-art room reje
 
 // --- 4. Public pixel operation validation -----------------------------------
 
-it("Public pixel draw accepts an in-bounds integer point and a brush size 1-8", async () => {
+it("Public pixel draw accepts an in-bounds integer point and a brush size within the shared 1-100 range", async () => {
   const posted = await postJson("/api/pixels/draw", PIXEL_DRAW);
   expect(posted.status).toBe(201);
   expect(posted.body.kind).toBe("draw");
@@ -213,7 +222,7 @@ it("Public pixel draw accepts an in-bounds integer point and a brush size 1-8", 
   expect((ops.body as Op[]).some((op) => op.id === posted.body.id)).toBe(true);
 });
 
-it("Public pixel erase accepts an in-bounds integer point and a brush size 1-8, with no color field required", async () => {
+it("Public pixel erase accepts an in-bounds integer point and a brush size within the shared 1-100 range, with no color field required", async () => {
   const { cookie } = await postJson("/api/pixels/draw", PIXEL_DRAW);
   const erased = await postJson("/api/pixels/erase", { size: 2, points: [{ x: 5, y: 5 }] }, cookie);
   expect(erased.status).toBe(201);
@@ -237,7 +246,7 @@ it("Public pixel draw rejects a non-integer point, an out-of-bounds point, and a
   const negative = await postJson("/api/pixels/draw", { color: "#1d1d1d", size: 1, points: [{ x: -1, y: 0 }] });
   expect(negative.status).toBe(400);
 
-  for (const badSize of [0, 9, -1, 2.5, "3", null, undefined]) {
+  for (const badSize of [0, 101, -1, 2.5, "3", null, undefined]) {
     const res = await postJson("/api/pixels/draw", { color: "#1d1d1d", size: badSize, points: [{ x: 1, y: 1 }] });
     expect(res.status).toBe(400);
   }
@@ -251,7 +260,7 @@ it("Public pixel draw rejects a non-integer point, an out-of-bounds point, and a
 
 it("Public pixel erase rejects the same malformed shapes as draw, writing nothing", async () => {
   const before = await getJson("/api/pixels");
-  for (const badSize of [0, 9, -1, 2.5]) {
+  for (const badSize of [0, 101, -1, 2.5]) {
     const res = await postJson("/api/pixels/erase", { size: badSize, points: [{ x: 1, y: 1 }] });
     expect(res.status).toBe(400);
   }
@@ -294,11 +303,12 @@ it("a Private pixel room validates points against its own resolution, not Public
   expect(outOfBounds.status).toBe(400);
 });
 
-// --- Private brush size: full 1-64 range, never clamped to canvas size -----
+// --- Brush size: uniform 1-100 range, never clamped to canvas size, never --
+// different between Public and Private ---------------------------------------
 
-it("a Private pixel room accepts brush sizes well beyond Public's own cap, up to 64, with no arbitrary scaling by canvas size", async () => {
+it("a Private pixel room accepts brush sizes up to 100, with no arbitrary scaling by canvas size", async () => {
   const room = await createRoom(32); // deliberately a SMALL 32x32 canvas
-  for (const size of [9, 32, 64]) {
+  for (const size of [9, 50, 99, 100]) {
     const res = await postJson(`/api/rooms/${room.body.code}/pixels/draw`, {
       color: "#1d1d1d",
       size,
@@ -308,25 +318,37 @@ it("a Private pixel room accepts brush sizes well beyond Public's own cap, up to
   }
 });
 
-it("a Private pixel room rejects a brush size above 64", async () => {
+it("a Private pixel room rejects a brush size above 100", async () => {
   const room = await createRoom(256);
   const res = await postJson(`/api/rooms/${room.body.code}/pixels/draw`, {
     color: "#1d1d1d",
-    size: 65,
+    size: 101,
     points: [{ x: 16, y: 16 }],
   });
   expect(res.status).toBe(400);
 });
 
-it("a Private pixel room's erase also accepts the full 1-64 brush range", async () => {
+it("a Private pixel room's erase also accepts the full 1-100 brush range, including the boundary size 1", async () => {
   const room = await createRoom(64);
-  const res = await postJson(`/api/rooms/${room.body.code}/pixels/erase`, { size: 64, points: [{ x: 16, y: 16 }] });
-  expect(res.status).toBe(201);
+  const atMax = await postJson(`/api/rooms/${room.body.code}/pixels/erase`, { size: 100, points: [{ x: 16, y: 16 }] });
+  expect(atMax.status).toBe(201);
+  const atMin = await postJson(`/api/rooms/${room.body.code}/pixels/erase`, { size: 1, points: [{ x: 16, y: 16 }] });
+  expect(atMin.status).toBe(201);
 });
 
-it("Public still rejects a brush size above its own cap of 8, even though Private now allows up to 64", async () => {
-  const res = await postJson("/api/pixels/draw", { color: "#1d1d1d", size: 9, points: [{ x: 1, y: 1 }] });
-  expect(res.status).toBe(400);
+it("Public now accepts the same brush size up to 100 as Private -- there is no longer a separate, smaller Public cap", async () => {
+  const atMax = await postJson("/api/pixels/draw", { color: "#1d1d1d", size: 100, points: [{ x: 1, y: 1 }] });
+  expect(atMax.status).toBe(201);
+  const overMax = await postJson("/api/pixels/draw", { color: "#1d1d1d", size: 101, points: [{ x: 1, y: 1 }] });
+  expect(overMax.status).toBe(400);
+});
+
+it("Public pixel erase also accepts the full 1-100 range and rejects above it", async () => {
+  const { cookie } = await postJson("/api/pixels/draw", PIXEL_DRAW);
+  const atMax = await postJson("/api/pixels/erase", { size: 100, points: [{ x: 5, y: 5 }] }, cookie);
+  expect(atMax.status).toBe(201);
+  const overMax = await postJson("/api/pixels/erase", { size: 101, points: [{ x: 5, y: 5 }] }, cookie);
+  expect(overMax.status).toBe(400);
 });
 
 // --- 6. Public/Private isolation for pixel ops -------------------------------
