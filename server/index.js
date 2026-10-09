@@ -15,6 +15,7 @@ import {
   recordHeartbeat,
   redoLatestOwnOp,
   setGuestNickname,
+  setRoomBackground,
   undoLatestOwnOp,
 } from "./db.js";
 
@@ -183,9 +184,16 @@ app.post("/api/ops/erase", (req, res) => handleErase(req, res, null));
 
 const PUBLIC_PIXEL_WIDTH = 2048;
 const PUBLIC_PIXEL_HEIGHT = 1152;
+// Square-only, fixed-enum resolutions: the original Step 3 room-creation
+// shape, preserved unchanged (and still fully supported by POST /api/rooms,
+// see below) for backward compatibility -- never removed just because the
+// New Canvas dialog now primarily sends independent width/height instead.
 const PIXEL_RESOLUTIONS = [32, 64, 128, 256];
+const MIN_CANVAS_DIMENSION = 16;
+const MAX_CANVAS_DIMENSION = 512;
 const MIN_BRUSH_SIZE = 1;
 const MAX_BRUSH_SIZE = 8;
+const BACKGROUND_KINDS = ["transparent", "white", "custom"];
 
 function isFiniteInt(value) {
   return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value);
@@ -222,6 +230,31 @@ function isValidBrushSize(size) {
 // guard below so a room is never treated as both at once.
 function isPixelRoom(room) {
   return room.width !== null;
+}
+
+// Supports an independently-chosen width and height (rectangular canvases),
+// each validated the same way: a plain integer in [16, 512] -- never a
+// scaling rule derived from the canvas's own size (there is no such rule to
+// derive from here).
+function isValidCanvasDimension(n) {
+  return isFiniteInt(n) && n >= MIN_CANVAS_DIMENSION && n <= MAX_CANVAS_DIMENSION;
+}
+
+// Validates a {kind, color} background payload (the New Canvas dialog's own
+// choice, and the later "change background" route's body): kind must be one
+// of the three supported values; color is required and must be a 6-digit hex
+// string for "custom", and is always normalized to null otherwise so a
+// stray client-supplied color can never silently persist unused. Returns the
+// canonical {kind, color} to store, or null for anything invalid.
+function validateBackground(background) {
+  if (!background || typeof background !== "object") return null;
+  const { kind, color } = background;
+  if (!BACKGROUND_KINDS.includes(kind)) return null;
+  if (kind === "custom") {
+    if (typeof color !== "string" || !/^#[0-9a-f]{6}$/i.test(color)) return null;
+    return { kind: "custom", color: color.toLowerCase() };
+  }
+  return { kind, color: null };
 }
 
 // --- Realtime (SSE) ----------------------------------------------------------
@@ -543,43 +576,76 @@ function normalizeRoomCode(raw) {
 // working room: the server mints a throwaway id for that one row itself.
 // ownerId is never read from the body -- always the same server-derived
 // anon cookie every other route already trusts.
-// presenceId behaves exactly as before. resolution is new and OPTIONAL: when
-// omitted entirely, this creates a legacy freehand room exactly as it always
-// has (width/height stay NULL) -- the C8 frontend never sends this field, so
-// its existing "Create private room" flow is completely unaffected. When
-// present, it must be one of the four supported pixel-art resolutions and
-// creates a pixel-art studio fixed at that square resolution forever.
+// presenceId behaves exactly as before. Three shapes, tried in this order:
+//   1. {width, height, background?} -- the New Canvas dialog's own shape.
+//      Independent integer dimensions [16, 512] (rectangular canvases are
+//      fully supported), plus an optional background ({kind, color}, see
+//      validateBackground) defaulting to opaque white when omitted.
+//   2. {resolution} -- the original Step 3 shape, preserved unchanged for
+//      backward compatibility (a square pixel-art studio, always opaque
+//      white): still fully supported, never removed.
+//   3. neither -- a legacy freehand room, exactly as it always has been
+//      (width/height/background all unused). The C8 frontend never sends
+//      width/height/resolution, so its existing "Create private room" flow
+//      is completely unaffected.
 app.post("/api/rooms", (req, res) => {
-  const { presenceId, resolution } = req.body ?? {};
+  const { presenceId, width, height, background, resolution } = req.body ?? {};
   const ownerId = getOrSetAnonId(req, res);
 
-  let width = null;
-  let height = null;
-  if (resolution !== undefined) {
+  let roomWidth = null;
+  let roomHeight = null;
+  let roomBackground = { kind: "white", color: null };
+
+  if (width !== undefined || height !== undefined) {
+    if (!isValidCanvasDimension(width) || !isValidCanvasDimension(height)) {
+      res.status(400).json({
+        error: `width and height must each be an integer between ${MIN_CANVAS_DIMENSION} and ${MAX_CANVAS_DIMENSION}`,
+      });
+      return;
+    }
+    roomWidth = width;
+    roomHeight = height;
+    if (background !== undefined) {
+      const validated = validateBackground(background);
+      if (!validated) {
+        res.status(400).json({ error: "background must be {kind: 'transparent'|'white'|'custom', color?: '#rrggbb'}" });
+        return;
+      }
+      roomBackground = validated;
+    }
+  } else if (resolution !== undefined) {
     if (!PIXEL_RESOLUTIONS.includes(resolution)) {
       res.status(400).json({ error: `resolution must be one of ${PIXEL_RESOLUTIONS.join(", ")}` });
       return;
     }
-    width = resolution;
-    height = resolution;
+    roomWidth = resolution;
+    roomHeight = resolution;
   }
 
   const code = createRoom(
     typeof presenceId === "string" && presenceId.length > 0 ? presenceId : randomUUID(),
     ownerId,
     Date.now(),
-    width,
-    height,
+    roomWidth,
+    roomHeight,
+    roomBackground.kind,
+    roomBackground.color,
   );
-  res.status(201).json({ code, kind: width === null ? "legacy" : "pixel", width, height });
+  res.status(201).json({
+    code,
+    kind: roomWidth === null ? "legacy" : "pixel",
+    width: roomWidth,
+    height: roomHeight,
+    background: roomWidth === null ? null : roomBackground,
+  });
 });
 
 // Existence check only -- 404 for an unknown or expired code, and never
 // creates one. getActiveRoom reconciles occupancy and physically deletes the
 // room first if it has expired, so an expired code 404s exactly like a code
-// that was never issued. kind/width/height are additive beyond the original
-// {code}-only response -- room metadata distinguishing a pixel-art studio
-// from a legacy freehand room, for whichever future frontend step needs it.
+// that was never issued. kind/width/height/background are additive beyond
+// the original {code}-only response -- room metadata distinguishing a
+// pixel-art studio (and its display background) from a legacy freehand room.
 app.get("/api/rooms/:code", (req, res) => {
   const code = normalizeRoomCode(req.params.code);
   const room = getActiveRoom(code);
@@ -587,7 +653,41 @@ app.get("/api/rooms/:code", (req, res) => {
     res.status(404).json({ error: "no such room" });
     return;
   }
-  res.json({ code, kind: isPixelRoom(room) ? "pixel" : "legacy", width: room.width, height: room.height });
+  const pixel = isPixelRoom(room);
+  res.json({
+    code,
+    kind: pixel ? "pixel" : "legacy",
+    width: room.width,
+    height: room.height,
+    background: pixel ? { kind: room.background_kind, color: room.background_color } : null,
+  });
+});
+
+// Updates a pixel-art studio's background only -- never its dimensions
+// (immutable after creation, see POST /api/rooms above), never any drawing
+// content, and never pixel ownership (server/db.js's setRoomBackground only
+// ever writes the two background columns). Open to anyone who can reach this
+// room's code, the same trust model every other room route already has --
+// there is no room-owner/admin concept anywhere in this app for this to be
+// scoped to.
+app.post("/api/rooms/:code/background", (req, res) => {
+  const code = normalizeRoomCode(req.params.code);
+  const room = getActiveRoom(code);
+  if (!room) {
+    res.status(404).json({ error: "no such room" });
+    return;
+  }
+  if (!isPixelRoom(room)) {
+    res.status(400).json({ error: "this room is a legacy freehand room; it has no background setting" });
+    return;
+  }
+  const validated = validateBackground(req.body);
+  if (!validated) {
+    res.status(400).json({ error: "background must be {kind: 'transparent'|'white'|'custom', color?: '#rrggbb'}" });
+    return;
+  }
+  setRoomBackground(code, validated.kind, validated.color);
+  res.status(200).json({ background: validated });
 });
 
 // Explicitly scoped to the freehand replay list, exactly like GET /api/ops

@@ -132,6 +132,26 @@ if (!columnExists("rooms", "height")) {
   db.exec("ALTER TABLE rooms ADD COLUMN height INTEGER");
 }
 
+// Additive, idempotent, like width/height above. Document background is
+// metadata about how a pixel-art studio's canvas is DISPLAYED -- opaque
+// white, opaque custom colour, or true transparency (shown as a checkerboard
+// client-side) -- never an ordinary drawing operation, never stored in
+// `ops`, and never touching pixel ownership or dimensions. DEFAULT 'white'
+// means every room that exists before this migration lands -- every legacy
+// freehand room (background is simply unused there) and every pixel-art
+// studio created under the earlier resolution-only API (which had no
+// background concept and behaved as opaque white) -- keeps exactly its prior
+// visual appearance. background_color is only ever non-NULL when
+// background_kind = 'custom' (server/index.js's own validation enforces
+// this; nothing here needs a CHECK constraint to do it, the same precedent
+// doc_kind/active/undo_order above already established).
+if (!columnExists("rooms", "background_kind")) {
+  db.exec("ALTER TABLE rooms ADD COLUMN background_kind TEXT NOT NULL DEFAULT 'white'");
+}
+if (!columnExists("rooms", "background_color")) {
+  db.exec("ALTER TABLE rooms ADD COLUMN background_color TEXT");
+}
+
 // A lease, not a membership list: one row per (room, tab/page-load), reset on
 // every heartbeat. presence_id is never the artwork-owner identity (owner_id,
 // the same anon_id draw/erase ops already use) -- it only exists to let two
@@ -174,11 +194,19 @@ const insertOpStmt = db.prepare(
 );
 
 // width/height are NULL for a legacy freehand room (the default every
-// pre-Step-3 call site still gets, see createRoom below) and a resolution in
-// cells for a pixel-art studio -- the one fact every pixel route needs to
-// validate operations and every legacy route needs to keep ignoring.
-const insertRoomStmt = db.prepare("INSERT INTO rooms (id, created_at, width, height) VALUES (?, ?, ?, ?)");
-const selectRoomStmt = db.prepare("SELECT id, created_at, empty_since, width, height FROM rooms WHERE id = ?");
+// pre-Step-3 call site still gets, see createRoom below) and this room's own
+// dimensions in cells for a pixel-art studio -- the one fact every pixel
+// route needs to validate operations and every legacy route needs to keep
+// ignoring. background_kind/background_color default to 'white'/NULL for
+// every caller that doesn't pass them (every pre-background-metadata call
+// site, legacy and pixel-art alike).
+const insertRoomStmt = db.prepare(
+  "INSERT INTO rooms (id, created_at, width, height, background_kind, background_color) VALUES (?, ?, ?, ?, ?, ?)",
+);
+const selectRoomStmt = db.prepare(
+  "SELECT id, created_at, empty_since, width, height, background_kind, background_color FROM rooms WHERE id = ?",
+);
+const updateBackgroundStmt = db.prepare("UPDATE rooms SET background_kind = ?, background_color = ? WHERE id = ?");
 const deleteRoomStmt = db.prepare("DELETE FROM rooms WHERE id = ?");
 const clearEmptySinceStmt = db.prepare("UPDATE rooms SET empty_since = NULL WHERE id = ?");
 const setEmptySinceStmt = db.prepare("UPDATE rooms SET empty_since = ? WHERE id = ?");
@@ -499,13 +527,24 @@ export function getActiveRoom(code, now = Date.now()) {
 // existing 3-positional-argument call (createRoom(presenceId, ownerId, now),
 // used throughout spec/rooms-lifecycle.test.ts) keeps meaning exactly what it
 // always has -- a legacy freehand room, width/height defaulting to NULL.
-// Only a caller that explicitly passes both creates a pixel-art studio.
-export function createRoom(presenceId, ownerId, now = Date.now(), width = null, height = null) {
+// backgroundKind/backgroundColor are appended after THOSE for the identical
+// reason: every existing 5-positional-argument pixel-room-creation call
+// (server/index.js's old resolution-only path) keeps creating an opaque
+// white studio, exactly as it always has, without needing to change.
+export function createRoom(
+  presenceId,
+  ownerId,
+  now = Date.now(),
+  width = null,
+  height = null,
+  backgroundKind = "white",
+  backgroundColor = null,
+) {
   for (let attempt = 0; attempt < 10; attempt++) {
     const code = randomRoomCode();
     db.exec("BEGIN");
     try {
-      insertRoomStmt.run(code, now, width, height);
+      insertRoomStmt.run(code, now, width, height, backgroundKind, backgroundColor);
       upsertPresenceStmt.run(code, presenceId, ownerId, now);
       db.exec("COMMIT");
       return code;
@@ -515,6 +554,19 @@ export function createRoom(presenceId, ownerId, now = Date.now(), width = null, 
     }
   }
   throw new Error(`could not generate a unique room code after ${10} attempts`);
+}
+
+// Updates a pixel-art studio's background metadata only -- never touches
+// width/height (immutable after creation), never touches `ops` (so no
+// drawing content, and no pixel ownership, is ever affected), and never
+// recreates the room row. server/index.js validates kind/colour before this
+// is ever called and gates it to pixel-art rooms only (a legacy freehand
+// room's background_kind is simply unused); this function itself does not
+// re-validate, matching this file's existing convention of trusting its own
+// callers for input shape (server/index.js is always the one caller).
+export function setRoomBackground(roomId, kind, color) {
+  updateBackgroundStmt.run(kind, color, roomId);
+  return selectRoomStmt.get(roomId);
 }
 
 // Renews one tab's lease. Validates the room first (same not-found semantics

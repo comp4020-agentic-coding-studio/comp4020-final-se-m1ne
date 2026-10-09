@@ -238,6 +238,38 @@ body {
   color: var(--text-primary);
 }
 
+#room-background-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+#room-background-select {
+  padding: 3px 6px;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-family: inherit;
+}
+
+#room-background-colour-input {
+  width: 28px;
+  height: 22px;
+  padding: 1px;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  background: var(--control-bg);
+  cursor: pointer;
+}
+
+#room-background-colour-input[hidden] {
+  display: none;
+}
+
 /* --- Drawing ribbon ---------------------------------------------------------
    Compact groups (Tools, Size, Colours), left to right, each with a small
    label to read as a Paint-like ribbon rather than a row of plain HTML
@@ -798,12 +830,12 @@ body {
 
 /* The Private Room creation popover: identical chrome to #colour-popover
    (same tokens, same header/body shape) rather than inventing a second
-   popover style -- a resolution choice confirmed before creation, not a
-   permanently-visible toolbar control. */
+   popover style -- independent width/height and a background choice
+   confirmed before creation, never a permanently-visible toolbar control. */
 #room-create-popover {
   position: fixed;
   z-index: 30;
-  width: 220px;
+  width: 240px;
   background: var(--popover-bg);
   border: 1px solid var(--popover-border);
   border-radius: 6px;
@@ -848,16 +880,45 @@ body {
   gap: 10px;
 }
 
-#room-resolution-options {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-#room-resolution-options label {
+.new-canvas-field {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.new-canvas-field label {
+  color: var(--text-secondary);
+}
+
+.new-canvas-field input[type="number"] {
+  width: 70px;
+  padding: 3px 6px;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-family: inherit;
+}
+
+.new-canvas-field select {
+  padding: 3px 6px;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-family: inherit;
+}
+
+.new-canvas-field input[type="color"] {
+  width: 32px;
+  height: 24px;
+  padding: 1px;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  background: var(--control-bg);
   cursor: pointer;
 }
 

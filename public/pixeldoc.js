@@ -23,6 +23,22 @@ export const MIN_BRUSH_SIZE = 1;
 export const MAX_BRUSH_SIZE = 8;
 export const DEFAULT_BRUSH_SIZE = 2;
 
+// New Canvas dialog: independent, directly-editable width/height (a
+// rectangular canvas is fully supported, unlike the older square-only
+// PIXEL_RESOLUTIONS enum above, which POST /api/rooms still accepts
+// unchanged for backward compatibility). Kept in sync by hand with
+// server/index.js's own MIN_CANVAS_DIMENSION/MAX_CANVAS_DIMENSION.
+export const MIN_CANVAS_DIMENSION = 16;
+export const MAX_CANVAS_DIMENSION = 512;
+export const DEFAULT_CANVAS_SIZE = 128;
+
+// Document background: metadata about how a pixel-art studio's canvas is
+// displayed, never an ordinary drawing operation (server/db.js's rooms.
+// background_kind/background_color, Step "canvas foundation"). Kept in sync
+// by hand with server/index.js's own BACKGROUND_KINDS.
+export const BACKGROUND_KINDS = ["transparent", "white", "custom"];
+export const DEFAULT_BACKGROUND_COLOR = "#ffffff";
+
 // public/viewport.js's own MIN_ZOOM/MAX_ZOOM/ZOOM_LEVELS were sized for the
 // 1920x1080 freehand document, where 400% is already enormous. A 32x32 pixel
 // studio needs the opposite problem solved -- zooming an individual logical
@@ -50,29 +66,60 @@ export function resolveEditorMode(roomCode, room) {
     return { mode: "pixel", width: PUBLIC_PIXEL_WIDTH, height: PUBLIC_PIXEL_HEIGHT };
   }
   if (room && room.kind === "pixel" && typeof room.width === "number" && typeof room.height === "number") {
-    return { mode: "pixel", width: room.width, height: room.height };
+    return {
+      mode: "pixel",
+      width: room.width,
+      height: room.height,
+      // Falls back to opaque white only if the room response genuinely
+      // omitted background (never expected from a real server response,
+      // which always includes it for a pixel room -- this is purely
+      // defensive, the same spirit as every other fallback in this function).
+      background: room.background ?? { kind: "white", color: null },
+    };
   }
   return { mode: "legacy" };
 }
 
+// PIXEL_RESOLUTIONS/isValidPixelResolution describe the original square-only
+// room-creation shape (server/index.js's own `resolution` field), still
+// fully supported server-side for backward compatibility even though the
+// New Canvas dialog now always sends independent width/height instead (see
+// clampCanvasDimension/resolveNewCanvasBackground below).
 export function isValidPixelResolution(value) {
   return PIXEL_RESOLUTIONS.includes(value);
-}
-
-// Resolves the resolution to actually send to POST /api/rooms from the
-// create-room popover's selected radio value (a string, or undefined if
-// somehow none is checked) -- falls back to DEFAULT_PIXEL_RESOLUTION rather
-// than sending a missing or invalid value, and never trusts an out-of-range
-// one either, even though the server validates independently regardless.
-export function resolveRoomCreationResolution(rawValue) {
-  const n = Number(rawValue);
-  return isValidPixelResolution(n) ? n : DEFAULT_PIXEL_RESOLUTION;
 }
 
 export function clampBrushSize(size) {
   const n = Math.round(size);
   if (!Number.isFinite(n)) return DEFAULT_BRUSH_SIZE;
   return Math.min(MAX_BRUSH_SIZE, Math.max(MIN_BRUSH_SIZE, n));
+}
+
+// Live-clamps a New Canvas dialog width/height field as the user types --
+// never silently substitutes the default for an out-of-range number (that
+// would be surprising mid-edit), only for a genuinely non-numeric value.
+export function clampCanvasDimension(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return DEFAULT_CANVAS_SIZE;
+  return Math.min(MAX_CANVAS_DIMENSION, Math.max(MIN_CANVAS_DIMENSION, n));
+}
+
+export function isValidBackgroundKind(kind) {
+  return BACKGROUND_KINDS.includes(kind);
+}
+
+// Resolves the New Canvas dialog's (or the in-studio "change background"
+// control's) selected kind + optional custom colour into the canonical
+// {kind, color} shape POST /api/rooms and POST /api/rooms/:code/background
+// both expect -- color is always null except for "custom", and "custom"
+// always has SOME colour (falling back to white) rather than sending an
+// empty one.
+export function resolveNewCanvasBackground(kind, color) {
+  if (kind === "custom") {
+    return { kind: "custom", color: typeof color === "string" && color.length > 0 ? color : DEFAULT_BACKGROUND_COLOR };
+  }
+  if (kind === "transparent") return { kind: "transparent", color: null };
+  return { kind: "white", color: null };
 }
 
 // Client (CSS pixel) pointer position -> the integer grid cell it falls in,

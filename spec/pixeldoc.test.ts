@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  BACKGROUND_KINDS,
   boundsIntersect,
   buildRenderOps,
   cellBoundsForPoints,
   cellFromClientPoint,
   clampBrushSize,
+  clampCanvasDimension,
+  DEFAULT_BACKGROUND_COLOR,
+  DEFAULT_CANVAS_SIZE,
   DEFAULT_PIXEL_RESOLUTION,
+  isValidBackgroundKind,
   isValidPixelResolution,
+  MAX_CANVAS_DIMENSION,
+  MIN_CANVAS_DIMENSION,
   nextSyntheticSeq,
   PIXEL_MAX_ZOOM,
   PIXEL_MIN_ZOOM,
@@ -16,7 +23,7 @@ import {
   PUBLIC_PIXEL_WIDTH,
   removePendingOp,
   resolveEditorMode,
-  resolveRoomCreationResolution,
+  resolveNewCanvasBackground,
 } from "../public/pixeldoc.js";
 import { clampZoom, fitZoom, stepZoom } from "../public/viewport.js";
 
@@ -32,11 +39,23 @@ describe("resolveEditorMode", () => {
     });
   });
 
-  it("a pixel-kind room resolves to the pixel editor at that room's own stored resolution", () => {
+  it("a pixel-kind room resolves to the pixel editor at that room's own stored resolution and background", () => {
+    expect(
+      resolveEditorMode("ABCDEF", { kind: "pixel", width: 64, height: 64, background: { kind: "custom", color: "#336699" } }),
+    ).toEqual({
+      mode: "pixel",
+      width: 64,
+      height: 64,
+      background: { kind: "custom", color: "#336699" },
+    });
+  });
+
+  it("a pixel-kind room response with no background field defensively falls back to opaque white", () => {
     expect(resolveEditorMode("ABCDEF", { kind: "pixel", width: 64, height: 64 })).toEqual({
       mode: "pixel",
       width: 64,
       height: 64,
+      background: { kind: "white", color: null },
     });
   });
 
@@ -63,26 +82,6 @@ describe("pixel resolution handling", () => {
   it("isValidPixelResolution rejects anything outside the exact four supported sizes", () => {
     for (const bad of [0, 16, 100, 512, -32, 64.5, "64", null, undefined]) {
       expect(isValidPixelResolution(bad as unknown as number)).toBe(false);
-    }
-  });
-});
-
-// --- Room creation: resolving the create-room popover's selected value ------
-
-describe("resolveRoomCreationResolution (the create-room popover's selected radio value -> what POST /api/rooms actually receives)", () => {
-  it("passes through each of the four supported resolutions, given as the radio's own string value", () => {
-    for (const size of PIXEL_RESOLUTIONS) {
-      expect(resolveRoomCreationResolution(String(size))).toBe(size);
-    }
-  });
-
-  it("falls back to the default (128) when nothing is selected (undefined, e.g. document.querySelector found no checked radio)", () => {
-    expect(resolveRoomCreationResolution(undefined)).toBe(DEFAULT_PIXEL_RESOLUTION);
-  });
-
-  it("falls back to the default for any malformed or out-of-range value, never trusting it through unchecked", () => {
-    for (const bad of ["", "0", "100", "abc", null]) {
-      expect(resolveRoomCreationResolution(bad as unknown as string)).toBe(DEFAULT_PIXEL_RESOLUTION);
     }
   });
 });
@@ -186,6 +185,57 @@ describe("zoom for pixel documents (public/viewport.js's existing generic functi
 });
 
 // --- Local-pending-gesture bookkeeping (shared with Step 6's SSE reuse) ------
+
+// --- New Canvas dialog: independent width/height + background -------------
+
+describe("clampCanvasDimension", () => {
+  it("passes through any already-valid integer in [16, 512] unchanged", () => {
+    for (const n of [16, 64, 128, 300, 512]) expect(clampCanvasDimension(n)).toBe(n);
+  });
+
+  it("clamps below the minimum and above the maximum", () => {
+    expect(clampCanvasDimension(0)).toBe(MIN_CANVAS_DIMENSION);
+    expect(clampCanvasDimension(-50)).toBe(MIN_CANVAS_DIMENSION);
+    expect(clampCanvasDimension(9999)).toBe(MAX_CANVAS_DIMENSION);
+  });
+
+  it("rounds a fractional size and falls back to the default for non-numeric input", () => {
+    expect(clampCanvasDimension(128.4)).toBe(128);
+    expect(clampCanvasDimension("abc")).toBe(DEFAULT_CANVAS_SIZE);
+    expect(clampCanvasDimension(undefined)).toBe(DEFAULT_CANVAS_SIZE);
+  });
+
+  it("supports rectangular canvases: width and height are validated independently", () => {
+    expect(clampCanvasDimension(16)).toBe(16);
+    expect(clampCanvasDimension(512)).toBe(512);
+    // A caller choosing 16 for width and 512 for height gets both verbatim --
+    // neither dimension constrains or derives from the other.
+  });
+});
+
+describe("isValidBackgroundKind / resolveNewCanvasBackground", () => {
+  it("accepts exactly the three supported background kinds", () => {
+    expect(BACKGROUND_KINDS).toEqual(["transparent", "white", "custom"]);
+    for (const kind of BACKGROUND_KINDS) expect(isValidBackgroundKind(kind)).toBe(true);
+    expect(isValidBackgroundKind("opaque")).toBe(false);
+    expect(isValidBackgroundKind(undefined)).toBe(false);
+  });
+
+  it("resolves 'transparent' and 'white' with color always null", () => {
+    expect(resolveNewCanvasBackground("transparent", "#ff0000")).toEqual({ kind: "transparent", color: null });
+    expect(resolveNewCanvasBackground("white", "#ff0000")).toEqual({ kind: "white", color: null });
+  });
+
+  it("resolves 'custom' with the given colour, or a sensible default if none/empty was given", () => {
+    expect(resolveNewCanvasBackground("custom", "#336699")).toEqual({ kind: "custom", color: "#336699" });
+    expect(resolveNewCanvasBackground("custom", "")).toEqual({ kind: "custom", color: DEFAULT_BACKGROUND_COLOR });
+    expect(resolveNewCanvasBackground("custom", undefined)).toEqual({ kind: "custom", color: DEFAULT_BACKGROUND_COLOR });
+  });
+
+  it("an unrecognized kind falls back to white (the same safe default as omitting background entirely)", () => {
+    expect(resolveNewCanvasBackground("not-a-kind")).toEqual({ kind: "white", color: null });
+  });
+});
 
 // --- Bounded-region math for the incremental erase-reveal repaint ----------
 // (the performance path that avoids a full-history replay on every pointer

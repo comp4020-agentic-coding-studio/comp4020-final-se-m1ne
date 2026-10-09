@@ -66,6 +66,104 @@ it("creating a Private room with an unsupported resolution is rejected (400) and
   }
 });
 
+// --- New Canvas dialog: independent width/height + background --------------
+
+it("creating a Private room with independent width/height supports a rectangular canvas, defaulting background to opaque white", async () => {
+  const created = await postJson("/api/rooms", { width: 64, height: 256 });
+  expect(created.status).toBe(201);
+  expect(created.body).toMatchObject({
+    kind: "pixel",
+    width: 64,
+    height: 256,
+    background: { kind: "white", color: null },
+  });
+
+  const fetched = await getJson(`/api/rooms/${created.body.code}`);
+  expect(fetched.body).toMatchObject({ width: 64, height: 256, background: { kind: "white", color: null } });
+});
+
+it("creating a Private room at each dimension boundary (16 and 512) succeeds", async () => {
+  for (const dim of [16, 512]) {
+    const created = await postJson("/api/rooms", { width: dim, height: dim });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ width: dim, height: dim });
+  }
+});
+
+it("creating a Private room with an out-of-range or non-integer width/height is rejected (400)", async () => {
+  for (const bad of [15, 513, 0, -1, 64.5, "64", null]) {
+    const res = await postJson("/api/rooms", { width: bad, height: 128 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/width and height must each be an integer/);
+  }
+});
+
+it("creating a Private room with an explicit background persists it", async () => {
+  const transparent = await postJson("/api/rooms", { width: 32, height: 32, background: { kind: "transparent" } });
+  expect(transparent.body.background).toEqual({ kind: "transparent", color: null });
+
+  const custom = await postJson("/api/rooms", {
+    width: 32,
+    height: 32,
+    background: { kind: "custom", color: "#336699" },
+  });
+  expect(custom.body.background).toEqual({ kind: "custom", color: "#336699" });
+});
+
+it("creating a Private room with an invalid background is rejected (400), creating nothing", async () => {
+  const badKind = await postJson("/api/rooms", { width: 32, height: 32, background: { kind: "rainbow" } });
+  expect(badKind.status).toBe(400);
+
+  const customMissingColor = await postJson("/api/rooms", { width: 32, height: 32, background: { kind: "custom" } });
+  expect(customMissingColor.status).toBe(400);
+
+  const customBadColor = await postJson("/api/rooms", {
+    width: 32,
+    height: 32,
+    background: { kind: "custom", color: "not-a-colour" },
+  });
+  expect(customBadColor.status).toBe(400);
+});
+
+it("a Private room's background can be changed after creation without affecting its dimensions or drawing content", async () => {
+  const created = await postJson("/api/rooms", { width: 32, height: 32, background: { kind: "white" } });
+  const code = created.body.code;
+  const posted = await postJson(`/api/rooms/${code}/pixels/draw`, PIXEL_DRAW);
+  expect(posted.status).toBe(201);
+
+  const changed = await postJson(`/api/rooms/${code}/background`, { kind: "transparent" });
+  expect(changed.status).toBe(200);
+  expect(changed.body.background).toEqual({ kind: "transparent", color: null });
+
+  const fetched = await getJson(`/api/rooms/${code}`);
+  expect(fetched.body).toMatchObject({ width: 32, height: 32, background: { kind: "transparent", color: null } });
+
+  const ops = await getJson(`/api/rooms/${code}/pixels`);
+  expect((ops.body as Op[]).some((op) => op.id === posted.body.id)).toBe(true); // drawing content untouched
+});
+
+it("changing a legacy room's background is rejected (400): legacy rooms have no background setting", async () => {
+  const legacy = await createRoom();
+  const res = await postJson(`/api/rooms/${legacy.body.code}/background`, { kind: "white" });
+  expect(res.status).toBe(400);
+});
+
+it("changing the background of an unknown room 404s", async () => {
+  const res = await postJson("/api/rooms/ZZZZZZ/background", { kind: "white" });
+  expect(res.status).toBe(404);
+});
+
+it("an invalid background change payload is rejected (400) without altering the room's existing background", async () => {
+  const created = await postJson("/api/rooms", { width: 32, height: 32, background: { kind: "white" } });
+  const code = created.body.code;
+
+  const bad = await postJson(`/api/rooms/${code}/background`, { kind: "custom" }); // missing color
+  expect(bad.status).toBe(400);
+
+  const fetched = await getJson(`/api/rooms/${code}`);
+  expect(fetched.body.background).toEqual({ kind: "white", color: null }); // unchanged
+});
+
 // --- 3. Legacy room compatibility (no resolution field at all) --------------
 
 it("creating a Private room with no resolution field still produces a legacy freehand room, unchanged from the existing contract", async () => {
