@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Public archive</title>
+    <script>
+      (function () {
+        var saved = localStorage.getItem("theme");
+        var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var theme = saved === "dark" || saved === "light" ? saved : prefersDark ? "dark" : "light";
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      /* This page needs none of #workspace's interactive chrome -- a small,
+         self-contained set of rules, reusing only the shared design tokens
+         and .app-button from styles.css. */
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        height: 100%;
+        overflow: auto;
+      }
+      #archive-banner {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px 16px;
+        background: var(--ribbon-bg);
+        border-bottom: 1px solid var(--border);
+        color: var(--text-primary);
+        font-size: 0.85rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      #archive-canvas-wrap {
+        padding: 24px;
+      }
+      #canvas {
+        display: block;
+        background: #ffffff;
+        max-width: 90vw;
+        height: auto;
+        border: 1px solid var(--border);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="archive-banner">
+      <span>Archive &mdash; historical Public artwork from before the pixel-wall transition. Read-only.</span>
+      <a href="/" class="app-button">Back to Public pixel wall</a>
+    </div>
+    <div id="archive-canvas-wrap">
+      <canvas id="canvas" width="1920" height="1080"></canvas>
+    </div>
+    <script src="/archive.js" type="module"></script>
+  </body>
+</html>

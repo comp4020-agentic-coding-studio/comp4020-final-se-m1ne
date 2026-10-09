@@ -57,11 +57,26 @@
           ></button>
           <div id="session-controls">
             <div id="public-room-controls" class="session-group">
+              <!-- Only read/wired by public/pixel-editor.js -- the Public
+                   page is always pixel mode now, so public/app.js's own
+                   (untouched) "Create private room" handler never runs this
+                   select exists either way without affecting it. -->
+              <select id="room-resolution-select" aria-label="New private room resolution">
+                <option value="32">32 × 32</option>
+                <option value="64">64 × 64</option>
+                <option value="128" selected>128 × 128</option>
+                <option value="256">256 × 256</option>
+              </select>
               <button id="create-room-button" type="button" class="app-button">Create private room</button>
               <form id="join-room-form" class="join-control">
                 <input id="join-room-code" type="text" maxlength="6" placeholder="Room code" aria-label="Room code" />
                 <button type="submit" class="app-button">Join</button>
               </form>
+              <!-- Plain link, no JS needed: shown/hidden by the exact same
+                   #public-room-controls[hidden] rule every other Public-only
+                   control already relies on. Points at the historical C8
+                   Public freehand artwork, preserved read-only. -->
+              <a href="/archive.html" class="app-button">Archive</a>
             </div>
             <div id="private-room-controls" class="session-group" hidden>
               <span id="room-code-label"></span>
@@ -140,12 +155,23 @@
             >
               Edit colour
             </button>
+            <!-- Pixel mode's own, deliberately simpler custom-colour control
+                 (public/pixel-editor.js): a native colour input instead of
+                 the freehand hue-wheel popover below, which pixel mode never
+                 opens. Hidden by default; public/app.js never shows or reads
+                 this element, so the legacy editor is unaffected either way. -->
+            <input type="color" id="pixel-colour-input" aria-label="Custom colour" value="#1d1d1d" hidden />
           </div>
         </div>
       </div>
 
       <div id="canvas-viewport">
         <canvas id="canvas"></canvas>
+        <!-- Pure CSS/DOM overlay, positioned in JS by public/pixel-editor.js
+             to track the canvas's own CSS box at the current zoom -- never
+             drawn into #canvas's own 2D context, so it can never contaminate
+             stored artwork. Unused (left hidden) by public/app.js. -->
+        <div id="pixel-grid-overlay" aria-hidden="true" hidden></div>
       </div>
 
       <div id="status-bar">
@@ -237,6 +263,11 @@
       </div>
     </div>
 
-    <script src="/app.js" type="module"></script>
+    <!-- The one entry point for every page (Public and every room): decides
+         Public (always pixel now) vs. a room's own kind, then boots the
+         pixel editor directly or dynamically imports the untouched legacy
+         freehand editor (public/app.js) -- see public/pixel-editor.js's own
+         top-level comment. -->
+    <script src="/pixel-editor.js" type="module"></script>
   </body>
 </html>
