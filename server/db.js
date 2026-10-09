@@ -69,6 +69,33 @@ if (!columnExists("ops", "undo_order")) {
   db.exec("ALTER TABLE ops ADD COLUMN undo_order INTEGER");
 }
 
+// Additive, idempotent, like every migration above: distinguishes legacy
+// freehand vector ops (points are normalized [0,1] floats, size is a stroke
+// width/diameter -- the shape every C8 op already has) from the pixel-art
+// op shape a later step introduces (points are integer grid cells, size is
+// an integer brush size in cells). Every row that exists before this
+// migration lands -- every historical C8 op -- gets 'freehand'
+// automatically via DEFAULT, exactly once, and this migration never writes
+// to an existing row's doc_kind afterward: that is what keeps historical C8
+// artwork byte-for-byte intact (for a later read-only legacy archive)
+// rather than converted, deleted, or silently hidden.
+//
+// No CHECK constraint is added here, deliberately: SQLite's ALTER TABLE ADD
+// COLUMN can't retroactively constrain a column the way the original CREATE
+// TABLE's `kind IN ('draw', 'erase')` does for a fresh table, and no other
+// column this file has ever migrated in this way (room_id, active,
+// undo_order, above) carries one either -- every one of them relies on this
+// module's own functions to only ever write valid values. doc_kind follows
+// that same established precedent rather than introducing a new one.
+// insertOp is intentionally left untouched in this step: nothing yet writes
+// a value other than this column's own default, so every op inserted today
+// -- and every op already inserted before today -- is 'freehand', which is
+// exactly what "existing operation semantics... unmodified in this step"
+// requires.
+if (!columnExists("ops", "doc_kind")) {
+  db.exec("ALTER TABLE ops ADD COLUMN doc_kind TEXT NOT NULL DEFAULT 'freehand'");
+}
+
 // A room is just its code plus when it was created -- no name, owner,
 // membership, or settings: nothing this slice needs. A room's existence here
 // is also what lets "is this a real room?" be answered before ever touching
@@ -88,6 +115,23 @@ if (!columnExists("rooms", "empty_since")) {
   db.exec("ALTER TABLE rooms ADD COLUMN empty_since INTEGER");
 }
 
+// Additive, idempotent, like empty_since above. NULL on both -- the state of
+// every room that exists before this migration lands, and of every room
+// created today, since createRoom does not populate them in this step --
+// means "this room predates resolution selection": a legacy freehand room,
+// fixed at the existing 1920x1080 document, exactly as it already behaves
+// (nothing about createRoom, getActiveRoom, or any other room-lifecycle
+// function changes here). A later step that teaches createRoom to accept and
+// persist a resolution will give new pixel-art studios a non-NULL pair;
+// every room that exists today keeps working unmodified either way, which is
+// the whole point of these columns being nullable.
+if (!columnExists("rooms", "width")) {
+  db.exec("ALTER TABLE rooms ADD COLUMN width INTEGER");
+}
+if (!columnExists("rooms", "height")) {
+  db.exec("ALTER TABLE rooms ADD COLUMN height INTEGER");
+}
+
 // A lease, not a membership list: one row per (room, tab/page-load), reset on
 // every heartbeat. presence_id is never the artwork-owner identity (owner_id,
 // the same anon_id draw/erase ops already use) -- it only exists to let two
@@ -103,6 +147,21 @@ db.exec(`
     owner_id TEXT NOT NULL,
     last_seen INTEGER NOT NULL,
     PRIMARY KEY (room_id, presence_id)
+  )
+`);
+
+// A one-time guest nickname, keyed by the same owner_id every draw/erase op
+// and presence row already uses -- not a second identity system, and never
+// itself an authority: nothing in this table is read by any ownership,
+// erase, or undo/redo check, all of which stay keyed on owner_id alone (the
+// httpOnly anon_id cookie, server/anon.js, completely unchanged by this
+// table's existence). This table exists purely so a nickname can be looked
+// up/displayed; a later step owns actually reading or writing it.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS guests (
+    owner_id TEXT PRIMARY KEY,
+    nickname TEXT NOT NULL,
+    created_at INTEGER NOT NULL
   )
 `);
 
