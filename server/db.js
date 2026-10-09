@@ -170,11 +170,15 @@ export const STALE_TIMEOUT_MS = 90_000;
 export const ROOM_EMPTY_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 const insertOpStmt = db.prepare(
-  "INSERT INTO ops (id, owner_id, kind, color, size, points, created_at, room_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  "INSERT INTO ops (id, owner_id, kind, color, size, points, created_at, room_id, doc_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 );
 
-const insertRoomStmt = db.prepare("INSERT INTO rooms (id, created_at) VALUES (?, ?)");
-const selectRoomStmt = db.prepare("SELECT id, created_at, empty_since FROM rooms WHERE id = ?");
+// width/height are NULL for a legacy freehand room (the default every
+// pre-Step-3 call site still gets, see createRoom below) and a resolution in
+// cells for a pixel-art studio -- the one fact every pixel route needs to
+// validate operations and every legacy route needs to keep ignoring.
+const insertRoomStmt = db.prepare("INSERT INTO rooms (id, created_at, width, height) VALUES (?, ?, ?, ?)");
+const selectRoomStmt = db.prepare("SELECT id, created_at, empty_since, width, height FROM rooms WHERE id = ?");
 const deleteRoomStmt = db.prepare("DELETE FROM rooms WHERE id = ?");
 const clearEmptySinceStmt = db.prepare("UPDATE rooms SET empty_since = NULL WHERE id = ?");
 const setEmptySinceStmt = db.prepare("UPDATE rooms SET empty_since = ? WHERE id = ?");
@@ -214,7 +218,7 @@ function migrateLegacyStrokesIfPresent() {
   db.exec("BEGIN");
   try {
     for (const row of legacyRows) {
-      insertOpStmt.run(row.id, row.owner_id, "draw", row.color, row.width, row.points, row.created_at, null);
+      insertOpStmt.run(row.id, row.owner_id, "draw", row.color, row.width, row.points, row.created_at, null, "freehand");
     }
     db.exec("DROP TABLE strokes");
     db.exec("COMMIT");
@@ -237,35 +241,49 @@ function rowToOp(row) {
     points: JSON.parse(row.points),
     createdAt: row.created_at,
     roomId: row.room_id,
+    docKind: row.doc_kind,
   };
 }
 
 // Returns the seq SQLite assigned this op -- the authoritative position in
 // replay order. roomId is null for the Public Canvas, or a room's code --
 // the same insert path for both, so there is exactly one implementation of
-// "persist an op", not one per scope.
-export function insertOp({ id, ownerId, kind, color, size, points, createdAt, roomId = null }) {
-  const info = insertOpStmt.run(id, ownerId, kind, color ?? null, size, JSON.stringify(points), createdAt, roomId);
+// "persist an op", not one per scope. docKind defaults to "freehand" so every
+// existing caller (the freehand draw/erase routes, and every direct-db.js
+// test predating this step) keeps inserting exactly what it always has --
+// only the new pixel routes (server/index.js) ever pass "pixel" explicitly.
+export function insertOp({ id, ownerId, kind, color, size, points, createdAt, roomId = null, docKind = "freehand" }) {
+  const info = insertOpStmt.run(
+    id, ownerId, kind, color ?? null, size, JSON.stringify(points), createdAt, roomId, docKind,
+  );
   return Number(info.lastInsertRowid);
 }
 
 // `room_id IS ?` (not `=`) so a null roomId correctly matches the Public
 // Canvas rows (`=` never matches NULL in SQL) while a room code still matches
 // exactly like `=` would -- one query shape serves both scopes. `active = 1`
-// applies identically to both scopes too: Public Canvas has no undo/redo route
-// (see server/index.js), so its rows never become inactive and this filter is
-// a no-op there -- it's the same replay-membership rule everywhere, not a
-// second semantics introduced for rooms.
-export function listOps(roomId = null) {
+// applies identically to both scopes too -- it's the same replay-membership
+// rule everywhere, not a second semantics introduced for rooms.
+//
+// docKind defaults to "freehand": every pre-Step-3 call site (the existing
+// freehand GET /api/ops and GET /api/rooms/:code/ops routes, and every
+// existing test) keeps seeing exactly the freehand replay list it always has,
+// even once pixel ops start sharing the same room_id scope -- a Public pixel
+// op and a Public freehand op both live under room_id IS NULL, so without
+// this filter the old routes would start seeing pixel rows mixed in the
+// moment any pixel op existed. The new pixel routes pass docKind: "pixel"
+// explicitly; there is no third value, so one parameter cleanly serves both.
+export function listOps(roomId = null, docKind = "freehand") {
   const rows = db
     .prepare(
-      "SELECT seq, id, owner_id, kind, color, size, points, created_at, room_id FROM ops WHERE room_id IS ? AND active = 1 ORDER BY seq ASC",
+      "SELECT seq, id, owner_id, kind, color, size, points, created_at, room_id, doc_kind " +
+        "FROM ops WHERE room_id IS ? AND doc_kind = ? AND active = 1 ORDER BY seq ASC",
     )
-    .all(roomId);
+    .all(roomId, docKind);
   return rows.map(rowToOp);
 }
 
-const OP_COLUMNS = "seq, id, owner_id, kind, color, size, points, created_at, room_id";
+const OP_COLUMNS = "seq, id, owner_id, kind, color, size, points, created_at, room_id, doc_kind";
 
 // `room_id IS ?` (not `=`), exactly like listOps above: a null roomId (the
 // Public scope) must match rows where room_id is actually NULL, and `=`
@@ -273,12 +291,19 @@ const OP_COLUMNS = "seq, id, owner_id, kind, color, size, points, created_at, ro
 // make every Public undo/redo/abandon a permanent no-op. A non-null roomId
 // still matches exactly like `=` would, so this one query shape correctly
 // serves both scopes, the same way listOps already does.
+// doc_kind is part of the scope here for the same reason it is in listOps:
+// once a Public (or a room's) freehand and pixel ops can share the exact
+// same room_id, an owner's freehand Undo must never reach into their pixel
+// history (which the freehand UI has no way to re-render) or vice versa.
+// Every pre-Step-3 caller still passes "freehand" (see undoLatestOwnOp/
+// redoLatestOwnOp/abandonRedoBranch below), so this is a no-op filter for
+// every op that exists before this step.
 const findLatestActiveOwnOpStmt = db.prepare(
-  `SELECT ${OP_COLUMNS} FROM ops WHERE room_id IS ? AND owner_id = ? AND active = 1 ORDER BY seq DESC LIMIT 1`,
+  `SELECT ${OP_COLUMNS} FROM ops WHERE room_id IS ? AND owner_id = ? AND doc_kind = ? AND active = 1 ORDER BY seq DESC LIMIT 1`,
 );
 
 const findLatestRedoableOwnOpStmt = db.prepare(
-  `SELECT ${OP_COLUMNS} FROM ops WHERE room_id IS ? AND owner_id = ? AND active = 0 AND undo_order IS NOT NULL ORDER BY undo_order DESC LIMIT 1`,
+  `SELECT ${OP_COLUMNS} FROM ops WHERE room_id IS ? AND owner_id = ? AND doc_kind = ? AND active = 0 AND undo_order IS NOT NULL ORDER BY undo_order DESC LIMIT 1`,
 );
 
 // The deterministic ordering primitive for redo's LIFO order (see the
@@ -311,7 +336,7 @@ const redoOpStmt = db.prepare("UPDATE ops SET active = 1, undo_order = NULL WHER
 // room, or this same owner's Private branch when a Public edit just
 // persisted (or vice versa), is never touched.
 const abandonRedoBranchStmt = db.prepare(
-  "UPDATE ops SET undo_order = NULL WHERE room_id IS ? AND owner_id = ? AND active = 0 AND undo_order IS NOT NULL",
+  "UPDATE ops SET undo_order = NULL WHERE room_id IS ? AND owner_id = ? AND doc_kind = ? AND active = 0 AND undo_order IS NOT NULL",
 );
 
 // Undoes this owner's own most-recent currently-active op in this scope, and
@@ -323,8 +348,8 @@ const abandonRedoBranchStmt = db.prepare(
 // left to undo. createdAt is never written by undoOpStmt below, so the
 // returned op's createdAt is exactly what it was originally stamped with --
 // undoing never touches fade age.
-export function undoLatestOwnOp(roomId, ownerId) {
-  const row = findLatestActiveOwnOpStmt.get(roomId, ownerId);
+export function undoLatestOwnOp(roomId, ownerId, docKind = "freehand") {
+  const row = findLatestActiveOwnOpStmt.get(roomId, ownerId, docKind);
   if (!row) return null;
   undoOpStmt.run(row.seq);
   return rowToOp(row);
@@ -343,15 +368,15 @@ export function undoLatestOwnOp(roomId, ownerId) {
 // persisted/active history without making it visible again. Not touching seq
 // also means its original position in the global seq-ordered replay is
 // exactly where it lands back.
-export function redoLatestOwnOp(roomId, ownerId) {
-  const row = findLatestRedoableOwnOpStmt.get(roomId, ownerId);
+export function redoLatestOwnOp(roomId, ownerId, docKind = "freehand") {
+  const row = findLatestRedoableOwnOpStmt.get(roomId, ownerId, docKind);
   if (!row) return null;
   redoOpStmt.run(row.seq);
   return rowToOp(row);
 }
 
-export function abandonRedoBranch(roomId, ownerId) {
-  abandonRedoBranchStmt.run(roomId, ownerId);
+export function abandonRedoBranch(roomId, ownerId, docKind = "freehand") {
+  abandonRedoBranchStmt.run(roomId, ownerId, docKind);
 }
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O, 1/I/L
@@ -470,12 +495,17 @@ export function getActiveRoom(code, now = Date.now()) {
 // row can never commit without a live presence row already sitting under
 // it -- there is no window between "room exists" and "someone is present in
 // it" for a concurrent request to observe.
-export function createRoom(presenceId, ownerId, now = Date.now()) {
+// width/height are appended AFTER now (not inserted before it) so every
+// existing 3-positional-argument call (createRoom(presenceId, ownerId, now),
+// used throughout spec/rooms-lifecycle.test.ts) keeps meaning exactly what it
+// always has -- a legacy freehand room, width/height defaulting to NULL.
+// Only a caller that explicitly passes both creates a pixel-art studio.
+export function createRoom(presenceId, ownerId, now = Date.now(), width = null, height = null) {
   for (let attempt = 0; attempt < 10; attempt++) {
     const code = randomRoomCode();
     db.exec("BEGIN");
     try {
-      insertRoomStmt.run(code, now);
+      insertRoomStmt.run(code, now, width, height);
       upsertPresenceStmt.run(code, presenceId, ownerId, now);
       db.exec("COMMIT");
       return code;
@@ -542,4 +572,41 @@ export function leavePresence(roomId, presenceId, now = Date.now()) {
 // actually physically removed (or weren't, before evidence was captured).
 export function presenceCount(roomId) {
   return db.prepare("SELECT COUNT(*) AS n FROM presence WHERE room_id = ?").get(roomId).n;
+}
+
+// --- Guest nickname (cosmetic display metadata, never an authority) --------
+//
+// Keyed by owner_id, the same server-derived anon_id every draw/erase op and
+// presence row already uses -- there is no second identity to manage. Every
+// ownership/erase/undo check in this file reads owner_id directly from a
+// draw/erase op or a presence row; none of them, and nothing in
+// server/index.js, ever consults this table. A nickname is purely something
+// to look up and display next to that owner_id.
+
+const upsertGuestStmt = db.prepare(`
+  INSERT INTO guests (owner_id, nickname, created_at)
+  VALUES (?, ?, ?)
+  ON CONFLICT(owner_id) DO UPDATE SET nickname = excluded.nickname
+`);
+const selectGuestStmt = db.prepare("SELECT nickname FROM guests WHERE owner_id = ?");
+
+// null means this owner has never set a nickname -- the one-time setup
+// prompt's own cue to appear, decided entirely by the caller (server/
+// index.js), not by anything in this module.
+export function getGuestNickname(ownerId) {
+  const row = selectGuestStmt.get(ownerId);
+  return row ? row.nickname : null;
+}
+
+// Upsert: a later call from the same owner updates their nickname in place
+// rather than erroring or creating a second row (owner_id is the PRIMARY
+// KEY) -- "one-time setup" is a UI convention (server/index.js only prompts
+// when getGuestNickname is still null), not something this function itself
+// enforces, so an owner can still change a previously-set nickname later.
+// created_at is intentionally only ever written on the FIRST insert: the
+// ON CONFLICT clause never mentions it, so updating a nickname later leaves
+// this owner's original guest-since instant untouched.
+export function setGuestNickname(ownerId, nickname, now = Date.now()) {
+  upsertGuestStmt.run(ownerId, nickname, now);
+  return nickname;
 }
