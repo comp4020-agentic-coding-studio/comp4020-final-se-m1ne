@@ -157,16 +157,20 @@ export function shouldShowPixelGrid(gridPreferenceOn) {
 // on the Public page) and -- for a room -- that room's own metadata exactly
 // as GET /api/rooms/:code already returns it (server/index.js, Step 3):
 // {code, kind: "pixel" | "legacy", width, height}. Public is unconditionally
-// the pixel wall now (the primary Public experience, Step 5's product
-// direction) -- `room` is ignored entirely when roomCode is null, so a
-// caller never needs to fetch room metadata just to render Public. A room's
-// own `kind` decides the rest: "pixel" gets the pixel editor at that room's
-// stored resolution, anything else (including a lookup failure) falls back
-// to "legacy" -- the existing, untouched freehand editor, never a crash or a
-// silently-reinterpreted document.
+// the restored C8 freehand wall again -- the pixel-art era's own ops are
+// untouched in the database (docKind "pixel", still fully readable via
+// /api/pixels if ever needed again), just no longer the live Public
+// experience. `room` is ignored entirely when roomCode is null, so a caller
+// never needs to fetch room metadata just to render Public. A room's own
+// `kind` decides the rest: an EXISTING pixel-art studio (one that already
+// has stored width/height -- created before this restoration) still opens
+// in the pixel editor, so that artwork stays reachable and editable rather
+// than orphaned; any other room (including a lookup failure, and every
+// NEWLY created room from now on, since room creation itself was restored
+// to its C8 shape) falls back to "legacy" -- the untouched freehand editor.
 export function resolveEditorMode(roomCode, room) {
   if (roomCode === null) {
-    return { mode: "pixel", width: PUBLIC_PIXEL_WIDTH, height: PUBLIC_PIXEL_HEIGHT };
+    return { mode: "legacy" };
   }
   if (room && room.kind === "pixel" && typeof room.width === "number" && typeof room.height === "number") {
     return {

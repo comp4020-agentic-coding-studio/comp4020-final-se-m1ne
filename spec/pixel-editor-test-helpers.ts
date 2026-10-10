@@ -70,6 +70,13 @@ export function installEventSourceStub() {
   vi.stubGlobal("EventSource", FakeEventSource);
 }
 
+// The fixed historical-pixel-room code these tests boot against -- Public
+// itself is the restored C8 freehand wall again (see public/pixeldoc.js's
+// resolveEditorMode), so the pixel editor these tests exercise is only still
+// reachable through an EXISTING pixel-art room (one created before that
+// restoration, kept editable so its artwork is never orphaned).
+export const TEST_PIXEL_ROOM_CODE = "TESTRM";
+
 // Mocks exactly the handful of plain (non-stream) endpoints a pixel-editor
 // boot and a draw/erase/undo/redo gesture touch -- everything else 200s with
 // an empty body, never reached in these tests' own scenarios. The initial
@@ -82,6 +89,15 @@ export function installFetchMock(posted: PostedRequest[]) {
     vi.fn(async (input: unknown, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/me") return jsonResponse({ ownerId: "owner-1", nickname: null });
+      if (url === `/api/rooms/${TEST_PIXEL_ROOM_CODE}`) {
+        return jsonResponse({
+          code: TEST_PIXEL_ROOM_CODE,
+          kind: "pixel",
+          width: 2048,
+          height: 1152,
+          background: { kind: "white", color: null },
+        });
+      }
       if (url.endsWith("/draw") || url.endsWith("/erase")) {
         const body = JSON.parse(String(init!.body));
         posted.push({ url, body });
@@ -144,14 +160,17 @@ export function firePointer(el: Element, type: string, props: Partial<PointerEve
   el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, ...props }));
 }
 
-// Boots public/pixel-editor.js fresh (as the Public pixel wall: jsdom's
-// default location has no /room/ prefix) with every stub installed, and
-// immediately delivers an empty `sync` frame -- the same "document has no
-// ops yet" starting point spec/pixel-editor-tool-size.test.ts and
-// spec/pixel-editor-grid.test.ts both already assumed before SSE replaced
-// the old GET-based initial load.
+// Boots public/pixel-editor.js fresh against the fixed historical pixel room
+// (TEST_PIXEL_ROOM_CODE) -- Public no longer resolves to the pixel editor at
+// all (it's the restored C8 freehand wall; see public/app.js's own test
+// coverage for that), so this is the one remaining way to exercise
+// pixel-editor.js's own tool-size/grid/realtime behaviour, which still fully
+// applies to any pre-existing pixel-art room. Immediately delivers an empty
+// `sync` frame -- the same "document has no ops yet" starting point these
+// tests assumed before SSE replaced the old GET-based initial load.
 export async function bootPixelEditorForTest(posted: PostedRequest[]) {
   vi.resetModules();
+  history.pushState(null, "", `/room/${TEST_PIXEL_ROOM_CODE}`);
   document.body.innerHTML = bodyHtml;
   installCanvasStub();
   installEventSourceStub();

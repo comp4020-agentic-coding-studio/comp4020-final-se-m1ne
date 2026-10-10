@@ -14,7 +14,13 @@
 // gesture sends the correct per-tool size in its real POST request body.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type PostedRequest, bootPixelEditorForTest, firePointer, flush } from "./pixel-editor-test-helpers.js";
+import {
+  TEST_PIXEL_ROOM_CODE,
+  type PostedRequest,
+  bootPixelEditorForTest,
+  firePointer,
+  flush,
+} from "./pixel-editor-test-helpers.js";
 
 function fireInput(el: Element, value: string) {
   (el as HTMLInputElement).value = value;
@@ -75,8 +81,8 @@ describe("Pencil/Eraser independent size -- real DOM, real module", () => {
     firePointer(canvas, "pointerup", { clientX: 20, clientY: 20 });
     await flush();
 
-    const draw = posted.find((p) => p.url === "/api/pixels/draw");
-    const erase = posted.find((p) => p.url === "/api/pixels/erase");
+    const draw = posted.find((p) => p.url === `/api/rooms/${TEST_PIXEL_ROOM_CODE}/pixels/draw`);
+    const erase = posted.find((p) => p.url === `/api/rooms/${TEST_PIXEL_ROOM_CODE}/pixels/erase`);
     expect(draw?.body.size).toBe(5);
     expect(erase?.body.size).toBe(8);
   });

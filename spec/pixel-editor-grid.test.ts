@@ -12,6 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  TEST_PIXEL_ROOM_CODE,
   type PostedRequest,
   bodyHtml,
   firePointer,
@@ -58,11 +59,15 @@ beforeEach(async () => {
   posted = [];
   clearRectCalls = [];
   localStorage.clear();
+  // Public is the restored C8 freehand wall again -- pixel-editor.js's own
+  // tool-size/grid/realtime behaviour is now only reachable through an
+  // existing pixel-art room (see pixel-editor-test-helpers.ts).
+  history.pushState(null, "", `/room/${TEST_PIXEL_ROOM_CODE}`);
   document.body.innerHTML = bodyHtml;
   installCanvasStub();
   installEventSourceStub();
   installFetchMock(posted);
-  await import("../public/pixel-editor.js"); // boots as Public: no /room/ prefix in jsdom's default location
+  await import("../public/pixel-editor.js");
   await flush();
   latestEventSource().emit("sync", { docKind: "pixel", width: 2048, height: 1152, ops: [] });
   await flush();
@@ -73,8 +78,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("Document popover is shared by Public too", () => {
-  it("#document-settings-button is revealed and opens a popover containing the Grid toggle and dimensions, for Public", () => {
+describe("Document popover", () => {
+  it("#document-settings-button is revealed and opens a popover containing the Grid toggle and dimensions", () => {
     const button = document.getElementById("document-settings-button") as HTMLButtonElement;
     const popover = document.getElementById("document-settings-popover") as HTMLElement;
     expect(button.hidden).toBe(false);
@@ -154,7 +159,7 @@ describe("Grid toggle", () => {
     firePointer(canvas, "pointerup", { clientX: 10, clientY: 10 });
     await flush();
 
-    const draw = posted.find((p) => p.url === "/api/pixels/draw");
+    const draw = posted.find((p) => p.url === `/api/rooms/${TEST_PIXEL_ROOM_CODE}/pixels/draw`);
     expect(draw).toBeTruthy();
     expect(draw!.body).not.toHaveProperty("grid");
     expect(draw!.body).not.toHaveProperty("showGrid");
@@ -185,8 +190,10 @@ describe("persistGesture repaint-skip performance optimization", () => {
       vi.fn(async (input: unknown, init?: RequestInit) => {
         const url = String(input);
         if (url === "/api/me") return jsonResponse({ ownerId: "owner-1", nickname: null });
-        if (url === "/api/pixels" && !init) return jsonResponse([]);
-        if (url === "/api/pixels/draw" || url === "/api/pixels/erase") return jsonResponse({ error: "rejected" }, 400);
+        if (url === `/api/rooms/${TEST_PIXEL_ROOM_CODE}`) {
+          return jsonResponse({ code: TEST_PIXEL_ROOM_CODE, kind: "pixel", width: 2048, height: 1152, background: { kind: "white", color: null } });
+        }
+        if (url.endsWith("/draw") || url.endsWith("/erase")) return jsonResponse({ error: "rejected" }, 400);
         return jsonResponse({});
       }),
     );

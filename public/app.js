@@ -409,6 +409,71 @@ async function loadMe() {
   ({ ownerId: myOwnerId } = await res.json());
 }
 
+// --- Real-time sync (SSE) -------------------------------------------------
+// Reuses the existing /api/ops(/rooms/:code)/stream endpoints -- generalized
+// server-side from the pixel-art editor's own SSE machinery (see
+// server/index.js's opSubscribers/broadcastOpEvent), now shared by this
+// restored freehand document model too. The server sends a full
+// authoritative snapshot as literally the first frame of every connection,
+// including every reconnect, so a plain `sync` handler that replaces
+// allOps/opsByOwner wholesale (loadOps's own existing full-reset behaviour)
+// is correct for both the initial load and recovery after a dropped
+// connection -- no separate GET request, no Last-Event-ID bookkeeping.
+const streamUrl = `${opsUrl}/stream`;
+
+function startRealtimeSync() {
+  const source = new EventSource(streamUrl);
+
+  source.addEventListener("sync", (event) => {
+    allOps = JSON.parse(event.data).ops;
+    opsByOwner = new Map();
+    layers = new Map();
+    for (const op of allOps) {
+      if (!opsByOwner.has(op.ownerId)) opsByOwner.set(op.ownerId, []);
+      opsByOwner.get(op.ownerId).push(op);
+    }
+    rebuildAllLayers();
+  });
+
+  source.addEventListener("op", (event) => {
+    const data = JSON.parse(event.data);
+    // Already applied locally the instant persistGesture's own fetch
+    // resolved (see below) -- this is that same op's broadcast echoing
+    // back, not new information.
+    if (allOps.some((op) => op.id === data.id)) return;
+    allOps.push(data);
+    if (!opsByOwner.has(data.ownerId)) opsByOwner.set(data.ownerId, []);
+    opsByOwner.get(data.ownerId).push(data);
+    // A remote collaborator's stroke was never painted locally (only our own
+    // gestures are painted live, point by point, as they happen), so it
+    // needs one real repaint to become visible -- just that one owner's own
+    // layer rebuilt, not every layer (rebuildAllLayers), which is the whole
+    // reason ops are already kept per-owner.
+    if (data.ownerId !== myOwnerId) {
+      rebuildLayerFromOps(data.ownerId);
+      repaintVisibleCanvas();
+    }
+    updateUndoRedoButtons();
+  });
+
+  // Undo/redo are rare next to the per-stroke frequency of "op", so there is
+  // no need for a second, more surgical reconciliation path here: loadOps()
+  // -- the exact same full reload performUndo/performRedo already trusted
+  // before this event existed -- re-fetches the authoritative active-op list
+  // and rebuilds every layer from it, correctly handling a remote or a local
+  // undo/redo alike with the one already-proven code path.
+  source.addEventListener("undo", loadOps);
+  source.addEventListener("redo", loadOps);
+
+  // Deliberately no onerror/reconnect handling: EventSource retries
+  // natively, and every retry is just a brand new connection to the same
+  // route, which always answers with an equally fresh `sync` snapshot.
+  // Closed automatically by the browser on navigation/unload; this app has
+  // no in-page document-switching to additionally close it for (leaving a
+  // room is always a full navigation -- see leaveRoom below).
+  return source;
+}
+
 function pointerPos(event) {
   return toNormalized(event.clientX, event.clientY);
 }
@@ -615,8 +680,11 @@ async function performUndo() {
   const { op } = await res.json();
   if (!op) return; // nothing left to undo -- not an error, just a no-op
   myRedoCount += 1;
-  await loadOps(); // reloads authoritative active ops and repaints via the existing engine -- no alternate replay path
-  updateUndoRedoButtons();
+  updateUndoRedoButtons(); // the Redo button's own enablement only ever depends on local myRedoCount, not on allOps
+  // allOps/opsByOwner/the repaint all update once the matching `undo` SSE
+  // broadcast echoes back (startRealtimeSync's own loadOps call, above) --
+  // the exact same event a remote collaborator's own undo delivers, so both
+  // are handled by one code path, never two.
 }
 
 async function performRedo() {
@@ -626,7 +694,6 @@ async function performRedo() {
   const { op } = await res.json();
   if (!op) return; // nothing left to redo
   myRedoCount = Math.max(0, myRedoCount - 1);
-  await loadOps();
   updateUndoRedoButtons();
 }
 
@@ -1015,7 +1082,14 @@ setMode(mode);
 // again -- a later window resize must never re-trigger Fit (see the removed
 // resize listener above).
 requestAnimationFrame(applyFit);
-loadMe().then(loadOps).then(updateUndoRedoButtons); // ownership must be known before a layer can be attributed to "my own"
+// ownership must be known before a layer can be attributed to "my own";
+// startRealtimeSync's own `sync` handler is what actually populates allOps
+// and renders for the first time -- see the SSE section above for why there
+// is no separate GET request for the initial load any more.
+loadMe().then(() => {
+  startRealtimeSync();
+  updateUndoRedoButtons();
+});
 
 // Exists solely to animate the Public Canvas's fade -- a Private Room's
 // effectiveOpacity never changes with time, so there is nothing for a

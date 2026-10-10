@@ -1,14 +1,20 @@
 // @vitest-environment jsdom
 //
-// Essential coverage for the new client-side SSE sync in
-// public/pixel-editor.js: dedup of a local change's own broadcast echo,
-// a remote collaborator's op actually becoming visible, and remote
-// undo/redo updating state -- using the same real-module/fake-EventSource
-// technique as spec/pixel-editor-grid.test.ts (see
-// spec/pixel-editor-test-helpers.ts).
+// Essential coverage for the client-side SSE sync in public/pixel-editor.js:
+// dedup of a local change's own broadcast echo, a remote collaborator's op
+// actually becoming visible, and remote undo/redo updating state -- using
+// the same real-module/fake-EventSource technique as
+// spec/pixel-editor-grid.test.ts (see spec/pixel-editor-test-helpers.ts).
+// Public itself is the restored C8 freehand wall again (see
+// public/pixeldoc.js's resolveEditorMode), so this boots against the fixed
+// historical pixel room spec/pixel-editor-test-helpers.ts sets up -- the one
+// remaining way pixel-editor.js's own realtime sync is reachable. The
+// equivalent freehand/Public coverage is spec/freehand-realtime.test.ts
+// (real HTTP+SSE against the server, not jsdom).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  TEST_PIXEL_ROOM_CODE,
   type PostedRequest,
   bodyHtml,
   firePointer,
@@ -24,11 +30,12 @@ let posted: PostedRequest[];
 beforeEach(async () => {
   vi.resetModules();
   posted = [];
+  history.pushState(null, "", `/room/${TEST_PIXEL_ROOM_CODE}`);
   document.body.innerHTML = bodyHtml;
   installCanvasStub();
   installEventSourceStub();
   installFetchMock(posted);
-  await import("../public/pixel-editor.js"); // Public: no /room/ prefix in jsdom's default location
+  await import("../public/pixel-editor.js");
   await flush();
   latestEventSource().emit("sync", { docKind: "pixel", width: 2048, height: 1152, ops: [] });
   await flush();
@@ -40,8 +47,8 @@ afterEach(() => {
 });
 
 describe("real-time sync via SSE", () => {
-  it("connects to the Public stream endpoint, not the Private one", () => {
-    expect(latestEventSource().url).toBe("/api/pixels/stream");
+  it("connects to this room's own stream endpoint, not Public's", () => {
+    expect(latestEventSource().url).toBe(`/api/rooms/${TEST_PIXEL_ROOM_CODE}/pixels/stream`);
   });
 
   it("a local draw's own broadcast echo is deduped, not appended twice", async () => {
@@ -50,7 +57,7 @@ describe("real-time sync via SSE", () => {
     firePointer(canvas, "pointerup", { clientX: 10, clientY: 10 });
     await flush();
 
-    const saved = posted.find((p) => p.url === "/api/pixels/draw");
+    const saved = posted.find((p) => p.url === `/api/rooms/${TEST_PIXEL_ROOM_CODE}/pixels/draw`);
     expect(saved).toBeTruthy();
     const echoedOp = { ...saved!.body, id: "op-1", ownerId: "owner-1", kind: "draw", createdAt: Date.now(), seq: 1, active: true };
 

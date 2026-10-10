@@ -146,6 +146,14 @@ async function main() {
 
   const resolved = resolveEditorMode(roomCode, room);
   if (resolved.mode === "legacy") {
+    // The continuous zoom slider is a pixel-editor-only control (C8's own
+    // zoom was always +/- buttons only, which app.js still has and still
+    // fully wires up) -- every OTHER pixel-only control already defaults to
+    // HTML's own `hidden` attribute and is only ever revealed by
+    // bootPixelEditor below, which never runs for a legacy page, so this is
+    // the one visible exception that needs hiding explicitly rather than
+    // sitting inertly on screen.
+    zoomSlider.hidden = true;
     // The untouched C8 freehand editor, loaded and handed off to entirely --
     // nothing below this point ever runs for a legacy room.
     await import("./app.js");

@@ -42,16 +42,12 @@ import { clampZoom, fitZoom, stepZoom } from "../public/viewport.js";
 // --- Pixel document selection -------------------------------------------------
 
 describe("resolveEditorMode", () => {
-  it("Public (roomCode null) is unconditionally the pixel wall at 2048x1152, regardless of any room argument", () => {
-    expect(resolveEditorMode(null, null)).toEqual({ mode: "pixel", width: PUBLIC_PIXEL_WIDTH, height: PUBLIC_PIXEL_HEIGHT });
-    expect(resolveEditorMode(null, { kind: "legacy" })).toEqual({
-      mode: "pixel",
-      width: PUBLIC_PIXEL_WIDTH,
-      height: PUBLIC_PIXEL_HEIGHT,
-    });
+  it("Public (roomCode null) is unconditionally the restored C8 freehand wall again, regardless of any room argument", () => {
+    expect(resolveEditorMode(null, null)).toEqual({ mode: "legacy" });
+    expect(resolveEditorMode(null, { kind: "pixel", width: 64, height: 64 })).toEqual({ mode: "legacy" });
   });
 
-  it("a pixel-kind room resolves to the pixel editor at that room's own stored resolution and background", () => {
+  it("an EXISTING pixel-kind room (created before this restoration) still resolves to the pixel editor at its own stored resolution and background", () => {
     expect(
       resolveEditorMode("ABCDEF", { kind: "pixel", width: 64, height: 64, background: { kind: "custom", color: "#336699" } }),
     ).toEqual({

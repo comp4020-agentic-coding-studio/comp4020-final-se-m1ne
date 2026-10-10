@@ -130,7 +130,12 @@ function handleDraw(req, res, roomId) {
   // in this same room_id scope) is a different document and must never be
   // touched by a freehand edit.
   abandonRedoBranch(roomId, op.ownerId, "freehand");
-  res.status(201).json({ ...op, seq });
+  const persisted = { ...op, seq };
+  // Broadcast only after the write has actually committed, exactly like the
+  // pixel draw/erase handlers' own broadcastPixelEvent calls -- an invalid
+  // request never reaches this line at all (see the validation above).
+  broadcastFreehandEvent(roomId, "op", { ...persisted, active: true });
+  res.status(201).json(persisted);
 }
 
 // Persists one eraser gesture's full dragged path as a single append-only
@@ -166,11 +171,18 @@ function handleErase(req, res, roomId) {
   // owner's own remaining redo branch in this scope, Public and room alike,
   // scoped to "freehand" so this owner's pixel redo branch is never touched.
   abandonRedoBranch(roomId, op.ownerId, "freehand");
-  res.status(201).json({ ...op, seq });
+  const persisted = { ...op, seq };
+  broadcastFreehandEvent(roomId, "op", { ...persisted, active: true });
+  res.status(201).json(persisted);
 }
 
 app.post("/api/ops/draw", (req, res) => handleDraw(req, res, null));
 app.post("/api/ops/erase", (req, res) => handleErase(req, res, null));
+
+// Public freehand real-time stream -- see startFreehandStream below (hoisted;
+// defined later in this file, called here exactly like the pixel stream
+// route already calls startPixelStream before its own textual definition).
+app.get("/api/ops/stream", (req, res) => startFreehandStream(req, res, null));
 
 // --- Pixel-art documents -----------------------------------------------------
 // A second, parallel op family, deliberately NOT layered onto the existing
@@ -266,59 +278,79 @@ function validateBackground(background) {
 }
 
 // --- Realtime (SSE) ----------------------------------------------------------
-// One in-process subscriber set per pixel document -- the Public wall, or one
-// specific pixel-art room -- never a second notion of scope beyond the exact
-// same (roomId) key every pixel route above already validates against. A
-// single Fly machine and one synchronous SQLite connection (server/db.js)
-// make this in-memory fan-out correct and sufficient: there is exactly one
-// Node process that could ever need to know about a write, so no broker
-// (Redis or otherwise) is needed to fan it out to the others. Legacy
-// freehand rooms/ops never get a scope key here at all -- there is no stream
-// route that ever resolves one for them (see the route guards below), so a
-// freehand write can structurally never broadcast into a pixel stream.
-const pixelSubscribers = new Map(); // scopeKey -> Set<ServerResponse>
+// One in-process subscriber set per DOCUMENT -- the Public wall or one
+// specific room, and now also docKind ("freehand" or "pixel"), since a
+// Public/room SCOPE can hold ops of either kind and they must never cross
+// into each other's stream (exactly the isolation doc_kind already gives
+// every other op-scoped query in this file). A single Fly machine and one
+// synchronous SQLite connection (server/db.js) make this in-memory fan-out
+// correct and sufficient: there is exactly one Node process that could ever
+// need to know about a write, so no broker (Redis or otherwise) is needed to
+// fan it out to the others.
+const opSubscribers = new Map(); // scopeKey -> Set<ServerResponse>
 
-function pixelScopeKey(roomId) {
-  return roomId === null ? "__public__" : roomId;
+function opScopeKey(roomId, docKind) {
+  return `${docKind}:${roomId === null ? "__public__" : roomId}`;
 }
 
-function subscribePixelStream(roomId, res) {
-  const key = pixelScopeKey(roomId);
-  let subscribers = pixelSubscribers.get(key);
+function subscribeOpStream(roomId, docKind, res) {
+  const key = opScopeKey(roomId, docKind);
+  let subscribers = opSubscribers.get(key);
   if (!subscribers) {
     subscribers = new Set();
-    pixelSubscribers.set(key, subscribers);
+    opSubscribers.set(key, subscribers);
   }
   subscribers.add(res);
   return function unsubscribe() {
     subscribers.delete(res);
-    if (subscribers.size === 0) pixelSubscribers.delete(key);
+    if (subscribers.size === 0) opSubscribers.delete(key);
   };
 }
 
 // Writes one SSE frame to every subscriber currently in this exact scope --
-// Public pixel wall or one specific room, never both, never any other room.
-// Called only after a write has already committed (insertOp/undoLatestOwnOp/
-// redoLatestOwnOp have already returned, synchronously -- see server/db.js),
-// so a rejected/invalid request, which returns before ever reaching this
-// point, can never cause a broadcast. A write failing to reach a particular
-// subscriber (a socket that is already gone but whose 'close' cleanup
-// hasn't run yet) is swallowed here -- best-effort, exactly like every other
-// best-effort network call in this codebase (see public/app.js's own
-// comments on persistGesture/sendHeartbeat) -- and is not this request's
-// problem to report; that subscriber's own cleanup handles it.
-function broadcastPixelEvent(roomId, event, data) {
-  const subscribers = pixelSubscribers.get(pixelScopeKey(roomId));
+// Public or one specific room, one specific docKind, never any other
+// combination. Called only after a write has already committed
+// (insertOp/undoLatestOwnOp/redoLatestOwnOp have already returned,
+// synchronously -- see server/db.js), so a rejected/invalid request, which
+// returns before ever reaching this point, can never cause a broadcast. A
+// write failing to reach a particular subscriber (a socket that is already
+// gone but whose 'close' cleanup hasn't run yet) is swallowed here --
+// best-effort, exactly like every other best-effort network call in this
+// codebase (see public/app.js's own comments on persistGesture/
+// sendHeartbeat) -- and is not this request's problem to report; that
+// subscriber's own cleanup handles it.
+function broadcastOpEvent(roomId, docKind, event, data) {
+  const subscribers = opSubscribers.get(opScopeKey(roomId, docKind));
   if (!subscribers || subscribers.size === 0) return;
   const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of subscribers) {
     try {
       res.write(frame);
     } catch {
-      // best-effort; the subscriber's own 'close' handler (startPixelStream
+      // best-effort; the subscriber's own 'close' handler (startOpStream
       // below) is the real cleanup path, not this write.
     }
   }
+}
+
+// Thin, docKind-fixed wrappers so every existing pixel call site below (all
+// of which predate this generalization) keeps calling exactly the same two
+// function names with exactly the same arguments -- behaviourally identical
+// to before, just backed by the shared, docKind-scoped map above instead of
+// a pixel-only one.
+function subscribePixelStream(roomId, res) {
+  return subscribeOpStream(roomId, "pixel", res);
+}
+function broadcastPixelEvent(roomId, event, data) {
+  broadcastOpEvent(roomId, "pixel", event, data);
+}
+
+// Freehand equivalents, used by the restored C8 freehand routes below.
+function subscribeFreehandStream(roomId, res) {
+  return subscribeOpStream(roomId, "freehand", res);
+}
+function broadcastFreehandEvent(roomId, event, data) {
+  broadcastOpEvent(roomId, "freehand", event, data);
 }
 
 const SSE_HEARTBEAT_INTERVAL_MS = 20_000;
@@ -348,6 +380,39 @@ function startPixelStream(req, res, roomId, width, height) {
   const heartbeat = setInterval(() => {
     try {
       res.write(": heartbeat\n\n"); // a comment line: keeps the connection alive through idle proxies, not a real event
+    } catch {
+      // connection already gone; req's 'close' below runs the real cleanup
+    }
+  }, SSE_HEARTBEAT_INTERVAL_MS);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
+}
+
+// Freehand equivalent of startPixelStream above, same snapshot-first design
+// (a complete, synchronous snapshot as the very first frame, before any
+// concurrent write can land in the gap) -- the only real difference is the
+// sync payload shape: a freehand document has no stored width/height at all
+// (public/viewport.js's own fixed DOCUMENT_WIDTH/HEIGHT cover every freehand
+// document, Public and every room alike), so there is nothing document-sized
+// to include here.
+function startFreehandStream(req, res, roomId) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  const unsubscribe = subscribeFreehandStream(roomId, res);
+  const ops = listOps(roomId, "freehand");
+  res.write(`event: sync\ndata: ${JSON.stringify({ docKind: "freehand", ops })}\n\n`);
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(": heartbeat\n\n");
     } catch {
       // connection already gone; req's 'close' below runs the real cleanup
     }
@@ -563,12 +628,16 @@ app.post("/api/pixels/redo", (req, res) => {
 // simply null, same status code either way.
 app.post("/api/ops/undo", (req, res) => {
   const ownerId = getOrSetAnonId(req, res);
-  res.status(200).json({ op: undoLatestOwnOp(null, ownerId, "freehand") });
+  const op = undoLatestOwnOp(null, ownerId, "freehand");
+  if (op) broadcastFreehandEvent(null, "undo", { ...op, active: false });
+  res.status(200).json({ op });
 });
 
 app.post("/api/ops/redo", (req, res) => {
   const ownerId = getOrSetAnonId(req, res);
-  res.status(200).json({ op: redoLatestOwnOp(null, ownerId, "freehand") });
+  const op = redoLatestOwnOp(null, ownerId, "freehand");
+  if (op) broadcastFreehandEvent(null, "redo", { ...op, active: true });
+  res.status(200).json({ op });
 });
 
 // Room codes are generated uppercase (server/db.js); normalizing here means a
@@ -743,6 +812,23 @@ app.post("/api/rooms/:code/ops/erase", (req, res) => {
   handleErase(req, res, code);
 });
 
+// Room-scoped freehand real-time stream -- gated exactly like the two routes
+// above (unknown/expired code 404s, a pixel-art room 400s toward its own
+// pixel stream instead).
+app.get("/api/rooms/:code/ops/stream", (req, res) => {
+  const code = normalizeRoomCode(req.params.code);
+  const room = getActiveRoom(code);
+  if (!room) {
+    res.status(404).json({ error: "no such room" });
+    return;
+  }
+  if (isPixelRoom(room)) {
+    res.status(400).json({ error: "this room is a pixel-art studio; use /api/rooms/:code/pixels/stream" });
+    return;
+  }
+  startFreehandStream(req, res, code);
+});
+
 // --- Pixel-art Private studios ----------------------------------------------
 // Mirrors the Public pixel routes above, scoped to one room and validated
 // against that room's own stored resolution instead of the fixed Public
@@ -867,7 +953,9 @@ app.post("/api/rooms/:code/undo", (req, res) => {
     return;
   }
   const ownerId = getOrSetAnonId(req, res);
-  res.status(200).json({ op: undoLatestOwnOp(code, ownerId, "freehand") });
+  const op = undoLatestOwnOp(code, ownerId, "freehand");
+  if (op) broadcastFreehandEvent(code, "undo", { ...op, active: false });
+  res.status(200).json({ op });
 });
 
 app.post("/api/rooms/:code/redo", (req, res) => {
@@ -882,7 +970,9 @@ app.post("/api/rooms/:code/redo", (req, res) => {
     return;
   }
   const ownerId = getOrSetAnonId(req, res);
-  res.status(200).json({ op: redoLatestOwnOp(code, ownerId, "freehand") });
+  const op = redoLatestOwnOp(code, ownerId, "freehand");
+  if (op) broadcastFreehandEvent(code, "redo", { ...op, active: true });
+  res.status(200).json({ op });
 });
 
 // Heartbeat: renews this one tab's presence lease. presenceId is the only
