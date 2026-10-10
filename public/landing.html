@@ -16,6 +16,8 @@
         document.documentElement.dataset.theme = prefersDark ? "dark" : "light";
       })();
     </script>
+    <link rel="stylesheet" href="/theme-tokens.css" />
+    <link rel="stylesheet" href="/shared-ui.css" />
     <link rel="stylesheet" href="/landing.css" />
   </head>
   <body>
@@ -28,30 +30,33 @@
          non-interactive -- there is no drawing/erasing/panning code path
          here at all, not just a disabled one. -->
     <canvas id="landing-canvas" aria-hidden="true"></canvas>
-    <!-- A soft, even scrim over the canvas so the hero text/button stay
-         comfortably readable over any artwork colour, without covering the
-         canvas with an opaque panel. -->
-    <div id="landing-scrim" aria-hidden="true"></div>
 
+    <!-- Small, local, readable title panel -- never a large panel or a
+         page-wide scrim over the canvas: the live artwork must look exactly
+         like the real Public Canvas (see public/landing.css's own
+         #landing-canvas rule for the fixed white background this relies on),
+         so legibility here comes from this one compact panel's own
+         background/shadow, not from dimming the canvas underneath it. -->
     <main id="landing-hero">
       <h1 id="landing-title">Shared Canvas</h1>
-      <p id="landing-subtitle">A cozy place to draw together, one stroke at a time.</p>
-      <button type="button" id="enter-canvas-button">Enter Canvas</button>
+      <p id="landing-subtitle">A cozy place to draw together.</p>
+      <button type="button" id="enter-canvas-button" class="app-button app-button-primary">Enter Canvas</button>
     </main>
 
-    <div id="online-counter" aria-live="polite">
+    <div id="online-counter" class="app-button" aria-live="polite">
       <span id="online-dot" aria-hidden="true"></span>
       <span id="online-count">0</span>
       <span>Online Now</span>
     </div>
 
-    <!-- Shown once, only for a visitor with no guest profile yet (GET
-         /api/me's own nickname still null -- public/landing.js checks this
-         on "Enter Canvas", never just from loading this page). Reuses the
+    <!-- The Welcome dialog -- shown every time "Enter Canvas" is clicked,
+         for a first-time AND a returning visitor alike (see
+         public/landing.js's handleEnterCanvas): the introduction is the same
+         either way, only the pre-filled fields and the action button's own
+         label ("Start Drawing" vs "Continue Drawing") differ. Reuses the
          exact same two fields and POST /api/me/profile as public/index.html's
-         own one-time setup modal and Profile popover -- one guest identity,
-         one validation contract, just reached from here first for a new
-         visitor. -->
+         own Profile popover -- one guest identity, one validation contract,
+         never a second one just because this is reached from here first. -->
     <div id="onboarding-overlay" hidden>
       <div id="onboarding-dialog" role="dialog" aria-labelledby="onboarding-title">
         <div id="onboarding-about"></div>
@@ -70,7 +75,7 @@
             <span class="onboarding-label">Cursor colour</span>
             <input type="color" id="onboarding-colour-input" value="#1e88e5" aria-label="Cursor colour" />
           </label>
-          <button type="button" id="onboarding-start-button">Start Drawing</button>
+          <button type="button" id="onboarding-start-button" class="app-button app-button-primary">Start Drawing</button>
         </div>
       </div>
     </div>

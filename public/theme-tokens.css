@@ -1,0 +1,85 @@
+/* --- Shared design tokens --------------------------------------------------
+   One consistent visual language for the entire site: the landing page
+   (public/landing.html/landing.css) and every editor surface (public/
+   index.html/styles.css -- ribbons, buttons, inputs, popovers, dialogs,
+   status controls) all read colour/radius/font values from here, never
+   redefine their own. A cozy, warm, restrained pixel-game palette -- never
+   the editor's old neutral grays/blues, never the landing page's own
+   previously-separate cream/sage palette; now there is exactly one.
+
+   #canvas's own background is the deliberate, permanent exception, in both
+   public/styles.css and public/landing.css: a literal #ffffff, never a
+   token, so there is nothing here (or in the dark override below) that could
+   ever tint, dim, or otherwise alter the artwork itself. A pixel-art
+   document's own chosen background (white/transparent-checkerboard/custom)
+   is a similar, separate exception -- see public/styles.css's own
+   .pixel-bg-* rules, also untouched by this file.
+*/
+:root {
+  --app-bg: #f6ead9;
+  --workspace-bg: #fffaf2;
+  --ribbon-bg: #f1e2c8;
+  --control-bg: #fffaf2;
+  --control-hover-bg: #f3e4c9;
+  --control-active-bg: #e9d3ab;
+  --control-disabled-bg: #f1e7d6;
+  --control-disabled-border: #e4d3b4;
+  --selected-bg: #dde9cc;
+  --selected-border: #93a97e;
+  --border: #e3d0ac;
+  --divider: #ddc49c;
+  --text-primary: #46382c;
+  --text-secondary: #8a7560;
+  --text-disabled: #c4b196;
+  --input-bg: #fffaf2;
+  --input-border: #d7bd91;
+  --focus-ring: #c97b3d;
+  --popover-bg: #fffaf2;
+  --popover-border: #e3d0ac;
+  --popover-shadow: rgba(120, 85, 45, 0.22);
+  --swatch-selected-border: #46382c;
+  --canvas-outline: rgba(70, 56, 44, 0.32);
+  --canvas-surround-bg: #ede0c6;
+  --canvas-dot: rgba(70, 56, 44, 0.13);
+  --grid-line: rgba(201, 123, 61, 0.35);
+  --sage: #93a97e;
+  --sage-hover: #839a6e;
+  --apricot: #e3934f;
+  --on-sage: #fffaf2;
+  --radius-sm: 4px;
+  --radius-md: 10px;
+  --mono-font: ui-monospace, "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+}
+
+:root[data-theme="dark"] {
+  --app-bg: #231b14;
+  --workspace-bg: #2a2118;
+  --ribbon-bg: #2d2419;
+  --control-bg: #332920;
+  --control-hover-bg: #3d3223;
+  --control-active-bg: #473b28;
+  --control-disabled-bg: #2a2219;
+  --control-disabled-border: #3a2f20;
+  --selected-bg: #3a4530;
+  --selected-border: #7f9a6e;
+  --border: #3d3121;
+  --divider: #463825;
+  --text-primary: #f2e7d8;
+  --text-secondary: #c7b8a2;
+  --text-disabled: #6e5f4a;
+  --input-bg: #2a2219;
+  --input-border: #4a3c28;
+  --focus-ring: #d99a66;
+  --popover-bg: #2b241c;
+  --popover-border: #4a3c28;
+  --popover-shadow: rgba(0, 0, 0, 0.55);
+  --swatch-selected-border: #f2e7d8;
+  --canvas-outline: rgba(242, 231, 216, 0.4);
+  --canvas-surround-bg: #241c14;
+  --canvas-dot: rgba(242, 231, 216, 0.1);
+  --grid-line: rgba(217, 154, 102, 0.4);
+  --sage: #7f9a6e;
+  --sage-hover: #8fae7c;
+  --apricot: #d99a66;
+  --on-sage: #1c1812;
+}

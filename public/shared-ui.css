@@ -1,0 +1,78 @@
+/* --- Shared "app button" family ---------------------------------------------
+   Used by both the editor (public/index.html/styles.css -- Undo/Redo,
+   Create/Join room, Profile, Help, theme toggle, Back to Public, every
+   popover's own buttons) and the landing page (public/landing.html/
+   landing.css -- Enter Canvas, the online counter, the Welcome dialog's own
+   action button), reading the same shared tokens (public/theme-tokens.css)
+   either way -- one real, reused component, not two visually-similar copies.
+   Moved here verbatim from public/styles.css's own former copy; nothing
+   about its rules changed in the move. */
+.app-button {
+  padding: 5px 12px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  line-height: 1.2;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.app-button:hover {
+  background: var(--control-hover-bg);
+}
+
+.app-button:active {
+  background: var(--control-active-bg);
+}
+
+.app-button:disabled {
+  background: var(--control-disabled-bg);
+  color: var(--text-disabled);
+  border-color: var(--control-disabled-border);
+  cursor: default;
+}
+
+/* Modifier for icon-only .app-button instances (Undo/Redo): a deliberate
+   square hit area in place of the text button's horizontal padding, while
+   keeping every other .app-button rule above (hover/active/disabled) as-is. */
+.app-button.icon-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-button.icon-button svg {
+  pointer-events: none;
+}
+
+/* Modifier for the one or two "primary call to action" buttons per page
+   (the landing page's Enter Canvas and the Welcome dialog's Start/Continue
+   Drawing) -- a filled, warm sage button rather than the neutral outlined
+   default, reusing the exact same shared tokens as the rest of the site so
+   it reads as "the same app" accented, not a different one. The editor
+   itself has no equivalent -- every editor action already reads clearly
+   enough as a flat outlined .app-button, so this modifier is never applied
+   there, preserving its existing look exactly. */
+.app-button-primary {
+  padding: 10px 24px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--on-sage);
+  background: var(--sage);
+  border-color: transparent;
+}
+
+.app-button-primary:hover {
+  background: var(--sage-hover);
+}
+
+.app-button-primary:active {
+  background: var(--sage-hover);
+}

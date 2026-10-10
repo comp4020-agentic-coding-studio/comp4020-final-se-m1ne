@@ -1,20 +1,22 @@
 // @vitest-environment jsdom
 //
-// Client-side coverage for public/landing.js: the new-visitor vs returning-
-// visitor onboarding split, read-only behaviour (no drawing/erasing network
-// calls ever originate from this page, regardless of pointer input), and
-// live-background compatibility with the exact same "sync"/"op" SSE events
-// public/app.js's own editor consumes. The server-side routing/presence
-// contract this page depends on is covered in spec/landing.test.ts; this
-// file is the first (and only) one to boot public/landing.js itself.
+// Client-side coverage for public/landing.js: the Welcome dialog now shown
+// on every "Enter Canvas" click (first-time AND returning visitor alike --
+// see public/landing.js's handleEnterCanvas), read-only behaviour (no
+// drawing/erasing network calls ever originate from this page, regardless of
+// pointer input), and live-background compatibility with the exact same
+// "sync"/"op" SSE events public/app.js's own editor consumes. The
+// server-side routing/presence contract this page depends on is covered in
+// spec/landing.test.ts; this file is the first (and only) one to boot
+// public/landing.js itself.
 
 import { describe, expect, it } from "vitest";
 import { bootLandingForTest, firePointer, flush, latestEventSource, type PostedRequest } from "./landing-test-helpers";
 
 let posted: PostedRequest[];
 
-describe("Enter Canvas / onboarding gate", () => {
-  it("a new visitor (no nickname yet) sees the onboarding modal instead of navigating immediately", async () => {
+describe("Welcome dialog", () => {
+  it("a first-time visitor (no nickname yet) sees the Welcome dialog with an empty nickname and a 'Start Drawing' action", async () => {
     posted = [];
     await bootLandingForTest(posted, { nickname: null, cursorColor: null });
     const enterButton = document.getElementById("enter-canvas-button")!;
@@ -28,9 +30,11 @@ describe("Enter Canvas / onboarding gate", () => {
     // Reuses the shared about copy (public/about-content.js) -- the same
     // wording the editor's own Help/About entry shows later.
     expect(document.getElementById("onboarding-about")!.textContent).toContain("Welcome to our canvas!");
+    expect((document.getElementById("onboarding-nickname-input") as HTMLInputElement).value).toBe("");
+    expect(document.getElementById("onboarding-start-button")!.textContent).toBe("Start Drawing");
   });
 
-  it("completing onboarding saves the profile via the existing guest-profile endpoint, reusing the one guest identity", async () => {
+  it("completing the dialog as a first-time visitor saves the profile via the existing guest-profile endpoint", async () => {
     posted = [];
     await bootLandingForTest(posted, { nickname: null, cursorColor: null });
     document.getElementById("enter-canvas-button")!.dispatchEvent(new Event("click", { bubbles: true }));
@@ -47,15 +51,45 @@ describe("Enter Canvas / onboarding gate", () => {
     expect(profilePost?.body).toMatchObject({ nickname: "Riley", cursorColor: "#ab12cd" });
   });
 
-  it("a returning visitor (nickname already set) never sees onboarding at all", async () => {
+  it("a returning visitor (nickname already set) still sees the Welcome dialog, pre-filled, with a 'Continue Drawing' action", async () => {
     posted = [];
     await bootLandingForTest(posted, { nickname: "Morgan", cursorColor: "#1e88e5" });
     const overlay = document.getElementById("onboarding-overlay")! as HTMLElement;
     document.getElementById("enter-canvas-button")!.dispatchEvent(new Event("click", { bubbles: true }));
     await flush();
 
-    expect(overlay.hidden).toBe(true);
-    expect(posted.some((p) => p.url === "/api/me/profile")).toBe(false);
+    expect(overlay.hidden).toBe(false);
+    expect(document.getElementById("onboarding-about")!.textContent).toContain("Welcome to our canvas!");
+    expect((document.getElementById("onboarding-nickname-input") as HTMLInputElement).value).toBe("Morgan");
+    expect((document.getElementById("onboarding-colour-input") as HTMLInputElement).value).toBe("#1e88e5");
+    expect(document.getElementById("onboarding-start-button")!.textContent).toBe("Continue Drawing");
+  });
+
+  it("a returning visitor who changes nothing never triggers a profile overwrite, and still reaches the editor", async () => {
+    posted = [];
+    await bootLandingForTest(posted, { nickname: "Morgan", cursorColor: "#1e88e5" });
+    document.getElementById("enter-canvas-button")!.dispatchEvent(new Event("click", { bubbles: true }));
+    await flush();
+
+    document.getElementById("onboarding-start-button")!.dispatchEvent(new Event("click", { bubbles: true }));
+    await flush();
+
+    expect(posted.some((p) => p.url === "/api/me/profile")).toBe(false); // no second guest identity, no unnecessary overwrite
+  });
+
+  it("a returning visitor who does change their nickname/colour saves the update (same guest identity, no duplicate)", async () => {
+    posted = [];
+    await bootLandingForTest(posted, { nickname: "Morgan", cursorColor: "#1e88e5" });
+    document.getElementById("enter-canvas-button")!.dispatchEvent(new Event("click", { bubbles: true }));
+    await flush();
+
+    (document.getElementById("onboarding-nickname-input") as HTMLInputElement).value = "MorganV2";
+    document.getElementById("onboarding-start-button")!.dispatchEvent(new Event("click", { bubbles: true }));
+    await flush();
+
+    const profilePosts = posted.filter((p) => p.url === "/api/me/profile");
+    expect(profilePosts).toHaveLength(1);
+    expect(profilePosts[0].body).toMatchObject({ nickname: "MorganV2" });
   });
 });
 

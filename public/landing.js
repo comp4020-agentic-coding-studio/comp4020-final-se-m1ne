@@ -124,24 +124,37 @@ function goToCanvas() {
   location.href = "/canvas";
 }
 
+// The Welcome dialog's own pre-fill, captured each time it opens -- compared
+// against the submitted values on "Start/Continue Drawing" so an unchanged
+// returning visitor never triggers an unnecessary POST /api/me/profile (see
+// below): reusing the existing guest identity must never mean silently
+// rewriting it on every single visit just because the dialog happened to be
+// shown again.
+let existingNickname = null;
+let existingCursorColor = null;
+
+// Shown every time "Enter Canvas" is clicked, for a first-time AND a
+// returning visitor alike -- the one behaviour change from this page's
+// previous round, where a returning visitor (nickname already set) skipped
+// the dialog entirely. GET /api/me still decides only the dialog's own
+// pre-filled values and its action button's label, never whether it opens.
 async function handleEnterCanvas() {
-  let me;
+  let me = { nickname: null, cursorColor: null };
   try {
     const res = await fetch("/api/me");
     me = await res.json();
   } catch {
-    // Can't tell new from returning -- fail open to the editor itself, which
-    // has its own guest-setup fallback (public/app.js's maybeShowGuestSetup)
-    // if a profile turns out not to exist after all.
-    goToCanvas();
-    return;
+    // Can't read the existing profile -- still show the dialog (same as a
+    // first-time visitor would see), rather than silently skipping it; the
+    // editor's own guest-setup fallback (public/app.js's maybeShowGuestSetup)
+    // remains the final safety net either way.
   }
-  if (me.nickname === null) {
-    onboardingColourInput.value = me.cursorColor ?? "#1e88e5";
-    onboardingOverlay.hidden = false;
-  } else {
-    goToCanvas();
-  }
+  existingNickname = me.nickname;
+  existingCursorColor = me.cursorColor;
+  onboardingNicknameInput.value = me.nickname ?? "";
+  onboardingColourInput.value = me.cursorColor ?? "#1e88e5";
+  onboardingStartButton.textContent = me.nickname === null ? "Start Drawing" : "Continue Drawing";
+  onboardingOverlay.hidden = false;
 }
 
 enterButton.addEventListener("click", handleEnterCanvas);
@@ -149,15 +162,26 @@ enterButton.addEventListener("click", handleEnterCanvas);
 onboardingStartButton.addEventListener("click", async () => {
   const nickname = onboardingNicknameInput.value.trim();
   if (nickname.length === 0 || nickname.length > 20) return; // the input's own maxlength already stops longer input
-  try {
-    const res = await fetch("/api/me/profile", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nickname, cursorColor: onboardingColourInput.value }),
-    });
-    if (!res.ok) return;
-  } catch {
-    return;
+  const cursorColor = onboardingColourInput.value;
+
+  // A returning visitor who changed nothing needs no write at all -- the
+  // existing profile already says exactly this, so this is never "an
+  // unnecessary overwrite" (server/db.js's setGuestNickname/
+  // setGuestCursorColor are idempotent regardless, but skipping the request
+  // outright is both simpler and exactly what "do not unnecessarily
+  // overwrite" asks for).
+  const unchanged = nickname === existingNickname && cursorColor.toLowerCase() === (existingCursorColor ?? "").toLowerCase();
+  if (!unchanged) {
+    try {
+      const res = await fetch("/api/me/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nickname, cursorColor }),
+      });
+      if (!res.ok) return;
+    } catch {
+      return;
+    }
   }
   goToCanvas();
 });

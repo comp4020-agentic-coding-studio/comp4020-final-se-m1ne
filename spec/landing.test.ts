@@ -174,7 +174,7 @@ it("the editor shell's own 'Back to Public Canvas' link returns to /canvas, not 
   expect(html).toContain('href="/canvas" id="back-to-public"');
 });
 
-it("GET /api/me distinguishes a new visitor (nickname null) from a returning one, same contract the landing page's onboarding gate relies on", async () => {
+it("GET /api/me distinguishes a new visitor (nickname null) from a returning one, same contract the Welcome dialog's pre-fill/button-label relies on", async () => {
   const fresh = await fetch(new URL("/api/me", baseUrl));
   const freshBody = await fresh.json();
   expect(freshBody.nickname).toBeNull();
@@ -184,7 +184,21 @@ it("GET /api/me distinguishes a new visitor (nickname null) from a returning one
 
   const returning = await fetch(new URL("/api/me", baseUrl), { headers: withCookie(cookie) });
   const returningBody = await returning.json();
-  expect(returningBody.nickname).toBe("Avery"); // the landing page would skip onboarding for this guest
+  expect(returningBody.nickname).toBe("Avery"); // the Welcome dialog would pre-fill this, not leave it blank
+});
+
+it("re-saving a profile under the same cookie updates the same guest identity, never creating a second one", async () => {
+  const fresh = await fetch(new URL("/api/me", baseUrl));
+  const ownerId = (await fresh.json()).ownerId as string;
+  const cookie = fresh.headers.get("set-cookie")?.split(";")[0];
+
+  await postJson("/api/me/profile", { nickname: "Jamie", cursorColor: "#112233" }, cookie);
+  const afterFirst = await postJson("/api/me/profile", { nickname: "JamieV2", cursorColor: "#445566" }, cookie);
+  expect(afterFirst.body.ownerId).toBe(ownerId); // same identity throughout, no new cookie/owner minted
+
+  const me = await fetch(new URL("/api/me", baseUrl), { headers: withCookie(cookie) }).then((r) => r.json());
+  expect(me.ownerId).toBe(ownerId);
+  expect(me.nickname).toBe("JamieV2"); // the one record was updated in place, not duplicated
 });
 
 it("Public's SSE sync frame reports a numeric onlineCount, and a heartbeat broadcasts an updated 'presence' event on the same stream", async () => {

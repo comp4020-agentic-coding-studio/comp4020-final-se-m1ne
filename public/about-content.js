@@ -1,24 +1,25 @@
-// Shared informational copy: the landing page's onboarding modal (public/
-// landing.js) shows this to a new visitor once, and the editor's compact
-// Help/About entry (public/help-popover.js, wired from both public/app.js and
-// public/pixel-editor.js) shows the exact same wording again later on
-// request -- one source of text, so the two can never quietly drift apart.
-// Markup only -- no behaviour, no DOM lookups, nothing page-specific.
+// Shared informational copy: the landing page's Welcome dialog (public/
+// landing.js) shows this every time "Enter Canvas" is clicked, and the
+// editor's compact Help/About entry (public/help-popover.js, wired from both
+// public/app.js and public/pixel-editor.js) shows the exact same wording
+// again later on request -- one source of text, so the two can never
+// quietly drift apart. Markup only -- no behaviour, no DOM lookups, nothing
+// page-specific.
 export const ABOUT_TITLE = "Welcome to our canvas!";
 export const ABOUT_INTRO = "A cozy place to draw, share little moments, and create something together.";
 
 export const ABOUT_SECTIONS = [
   {
     heading: "Public Canvas",
-    body: "Draw together on a shared canvas. Your strokes gently fade away over 12.5 hours, making room for new ideas.",
+    body: "Everyone shares the same live canvas. Artwork gradually fades and disappears over 12.5 hours.",
   },
   {
     heading: "Private Rooms",
-    body: "Create a room and share its code with friends. Draw together without fading. Rooms expire after 24 hours of continuous emptiness.",
+    body: "Create a room and share its code with friends. Artwork does not fade, but rooms expire after 24 hours of continuous emptiness.",
   },
   {
     heading: "Create Together",
-    body: "See other people's drawing and cursors in real time. Choose your colours, undo mistakes, and erase only your own artwork.",
+    body: "See live drawing and collaborative cursors, choose colours, undo mistakes, and erase only your own artwork.",
   },
 ];
 

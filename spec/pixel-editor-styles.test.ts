@@ -12,6 +12,12 @@ import fs from "node:fs";
 import path from "node:path";
 
 const css = fs.readFileSync(path.resolve(__dirname, "../public/styles.css"), "utf8");
+// Shared custom-property tokens (colours, radii, fonts) now live in their own
+// file, loaded alongside styles.css from public/index.html's own <head> --
+// one effective stylesheet in the browser, so checks for a token's
+// DEFINITION read both; checks for a selector's own RULE (which never moved)
+// still read styles.css alone.
+const tokensCss = fs.readFileSync(path.resolve(__dirname, "../public/theme-tokens.css"), "utf8");
 
 // Assumes the browser default root font-size (16px) -- this project sets no
 // html{font-size} override (confirmed by grep during this task), so
@@ -77,7 +83,7 @@ describe("left size rail stays within its narrow budget (styles.css source)", ()
 
 describe("pixel-grid overlay uses the shared blue accent, not a neutral gray", () => {
   it("--grid-line is defined for both themes and referenced by #pixel-grid-overlay", () => {
-    expect(css).toMatch(/--grid-line:/);
+    expect(tokensCss).toMatch(/--grid-line:/);
     const overlayRule = css.match(/#pixel-grid-overlay\s*\{[^}]*\}/);
     expect(overlayRule, "#pixel-grid-overlay rule should exist").toBeTruthy();
     expect(overlayRule![0]).toMatch(/var\(--grid-line\)/);
