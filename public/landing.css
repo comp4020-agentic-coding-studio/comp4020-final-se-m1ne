@@ -52,10 +52,19 @@ body {
    panel, never a page-wide scrim over the canvas): legibility comes from
    this one panel's own background/border/shadow, the same popover-style
    surface the editor's own popovers use, not from dimming the artwork
-   underneath it. */
+   underneath it.
+
+   Fixed desktop reference (1920x1080): horizontally centred, top edge at 12%
+   of viewport height (129.6px), 600px wide, approximately 150px tall (driven
+   by its own content/padding, not a hard height, so real font metrics never
+   get clipped). vh/vw units (not fixed px) are what makes "12% of viewport
+   height" responsive by construction -- the same percentage applies at any
+   window size, not just the 1080-tall reference it was specified against.
+   min()/clamp() below keep it from ever overflowing or clipping on a narrow
+   or short viewport instead. */
 #landing-hero {
   position: fixed;
-  top: 20px;
+  top: 12vh;
   left: 50%;
   transform: translateX(-50%);
   z-index: 1;
@@ -63,9 +72,9 @@ body {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: 10px;
-  max-width: min(88vw, 360px);
-  padding: 16px 22px;
+  gap: 12px;
+  width: min(600px, 92vw);
+  padding: 28px 32px;
   background: var(--popover-bg);
   border: 1px solid var(--popover-border);
   border-radius: var(--radius-md);
@@ -76,9 +85,10 @@ body {
   margin: 0;
   /* Pixel-game-flavoured without an external bitmap font or heavy outlines:
      a bold system sans with a touch of letter-spacing -- restrained, never
-     neon or harsh-outlined, and never large enough to compete with the
-     canvas underneath it. */
-  font-size: 1.4rem;
+     neon or harsh-outlined. clamp() keeps the reference's own 48px on a
+     desktop-sized viewport while shrinking gracefully on a narrow one,
+     rather than overflowing #landing-hero's own fixed width. */
+  font-size: clamp(1.75rem, 6vw, 3rem); /* 3rem = 48px at the default root size */
   font-weight: 800;
   letter-spacing: 0.01em;
   color: var(--text-primary);
@@ -86,13 +96,46 @@ body {
 
 #landing-subtitle {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: clamp(0.85rem, 2.2vw, 1.125rem); /* 1.125rem = 18px */
   color: var(--text-secondary);
   line-height: 1.4;
 }
 
+/* A separate, standalone element from #landing-hero -- the whole canvas is
+   visible in between the two, preserving "title above, open canvas area,
+   separate button below". Fixed desktop reference: horizontally centred,
+   top edge at 68% of viewport height (734.4px), 220x64px. */
+#landing-cta {
+  position: fixed;
+  top: 68vh;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+}
+
 #enter-canvas-button {
-  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(220px, 60vw);
+  height: 64px;
+  font-size: 1.05rem;
+}
+
+@media (max-width: 480px), (max-height: 480px) {
+  #landing-hero {
+    top: 8vh;
+    padding: 18px 20px;
+    gap: 8px;
+  }
+
+  #landing-cta {
+    top: 60vh;
+  }
+
+  #enter-canvas-button {
+    height: 52px;
+  }
 }
 
 /* --- Online Now counter -----------------------------------------------------
@@ -228,11 +271,6 @@ body {
 }
 
 @media (max-width: 480px) {
-  #landing-hero {
-    top: 12px;
-    padding: 12px 16px;
-  }
-
   #online-counter {
     right: 10px;
     bottom: 10px;

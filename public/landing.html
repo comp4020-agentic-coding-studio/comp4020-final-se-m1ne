@@ -40,8 +40,14 @@
     <main id="landing-hero">
       <h1 id="landing-title">Shared Canvas</h1>
       <p id="landing-subtitle">A cozy place to draw together.</p>
-      <button type="button" id="enter-canvas-button" class="app-button app-button-primary">Enter Canvas</button>
     </main>
+
+    <!-- A separate, standalone element from #landing-hero (not nested inside
+         the title panel) -- its own fixed position lower on the page, with
+         the whole canvas visible in between, see public/landing.css. -->
+    <div id="landing-cta">
+      <button type="button" id="enter-canvas-button" class="app-button app-button-primary">Enter Canvas</button>
+    </div>
 
     <div id="online-counter" class="app-button" aria-live="polite">
       <span id="online-dot" aria-hidden="true"></span>
