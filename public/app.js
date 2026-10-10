@@ -39,6 +39,20 @@ const zoomOutButton = document.getElementById("zoom-out-button");
 const zoomInButton = document.getElementById("zoom-in-button");
 const zoomPercentDisplay = document.getElementById("zoom-percent");
 const fitButton = document.getElementById("fit-button");
+const profileButton = document.getElementById("profile-button");
+const profilePopover = document.getElementById("profile-popover");
+const profilePopoverClose = document.getElementById("profile-popover-close");
+const profileNicknameInput = document.getElementById("profile-nickname-input");
+const profileColourInput = document.getElementById("profile-colour-input");
+const profileShowNicknameInput = document.getElementById("profile-show-nickname");
+const profileShowCursorInput = document.getElementById("profile-show-cursor");
+const profileShowOthersInput = document.getElementById("profile-show-others");
+const profileSaveButton = document.getElementById("profile-save-button");
+const guestSetupOverlay = document.getElementById("guest-setup-overlay");
+const guestSetupNicknameInput = document.getElementById("guest-setup-nickname-input");
+const guestSetupColourInput = document.getElementById("guest-setup-colour-input");
+const guestSetupConfirmButton = document.getElementById("guest-setup-confirm");
+const remoteCursorsContainer = document.getElementById("remote-cursors");
 
 // Theme is a local UI preference only -- never sent to the server, never
 // part of collaborative state (see server/db.js, untouched by this). The
@@ -404,9 +418,21 @@ async function loadOps() {
   rebuildAllLayers();
 }
 
+// myNickname is null until this owner has ever completed the one-time setup
+// / Profile popover (GET /api/me's own contract -- see server/index.js) --
+// that null is the one and only signal maybeShowGuestSetup acts on.
+// myCursorColor always has a starting value (the guest-setup dialog's own
+// default swatch) so there's something sane to show before any profile is
+// ever saved.
+let myNickname = null;
+let myCursorColor = "#1e88e5";
+
 async function loadMe() {
   const res = await fetch("/api/me");
-  ({ ownerId: myOwnerId } = await res.json());
+  const data = await res.json();
+  myOwnerId = data.ownerId;
+  myNickname = data.nickname;
+  if (data.cursorColor) myCursorColor = data.cursorColor;
 }
 
 // --- Real-time sync (SSE) -------------------------------------------------
@@ -465,6 +491,12 @@ function startRealtimeSync() {
   source.addEventListener("undo", loadOps);
   source.addEventListener("redo", loadOps);
 
+  // Ephemeral collaborator cursors -- never persisted, never artwork, never
+  // touching allOps/opsByOwner at all. See handleRemoteCursorEvent/
+  // removeRemoteCursor below.
+  source.addEventListener("cursor", (event) => handleRemoteCursorEvent(JSON.parse(event.data)));
+  source.addEventListener("cursor-hide", (event) => removeRemoteCursor(JSON.parse(event.data).ownerId));
+
   // Deliberately no onerror/reconnect handling: EventSource retries
   // natively, and every retry is just a brand new connection to the same
   // route, which always answers with an equally fresh `sync` snapshot.
@@ -473,6 +505,237 @@ function startRealtimeSync() {
   // room is always a full navigation -- see leaveRoom below).
   return source;
 }
+
+// --- Guest profile: one-time setup, Profile popover, preferences -----------
+// Nickname and cursor colour are the server-side guest profile (server/
+// db.js's guests table, POST /api/me/profile) -- the same record whichever
+// of the one-time modal or the Profile popover last saved. The three
+// visibility toggles are pure local preferences (like theme), never sent
+// anywhere except as the per-request showCursor/showNickname flags the
+// cursor endpoint already expected before this step (see
+// handlePixelCursor's own, pre-existing contract in server/index.js) --
+// "show others' cursors" has no server role at all, it only ever decides
+// whether THIS tab renders an incoming cursor event.
+const PROFILE_PREFS_KEY = "profilePrefs";
+
+function loadProfilePrefs() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PROFILE_PREFS_KEY) ?? "{}");
+    return {
+      showNickname: parsed.showNickname !== false,
+      showCursor: parsed.showCursor !== false,
+      showOthersCursors: parsed.showOthersCursors !== false,
+    };
+  } catch {
+    return { showNickname: true, showCursor: true, showOthersCursors: true };
+  }
+}
+
+let profilePrefs = loadProfilePrefs();
+
+function saveProfilePrefs() {
+  localStorage.setItem(PROFILE_PREFS_KEY, JSON.stringify(profilePrefs));
+}
+
+async function saveProfile(nickname, cursorColor) {
+  const res = await fetch("/api/me/profile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nickname, cursorColor }),
+  });
+  if (!res.ok) return false;
+  const saved = await res.json();
+  myNickname = saved.nickname;
+  myCursorColor = saved.cursorColor;
+  return true;
+}
+
+// Shown once, the very first time this browser draws here with no nickname
+// on record yet (GET /api/me's own nickname still null) -- completing it
+// always sets one, so it is never shown again afterward.
+function maybeShowGuestSetup() {
+  if (myNickname !== null) return;
+  guestSetupColourInput.value = myCursorColor;
+  guestSetupOverlay.hidden = false;
+}
+
+guestSetupConfirmButton.addEventListener("click", async () => {
+  const nickname = guestSetupNicknameInput.value.trim();
+  if (nickname.length === 0 || nickname.length > 20) return; // the form's own maxlength already stops longer input
+  const ok = await saveProfile(nickname, guestSetupColourInput.value);
+  if (!ok) return;
+  guestSetupOverlay.hidden = true;
+});
+
+function openProfilePopover() {
+  profileNicknameInput.value = myNickname ?? "";
+  profileColourInput.value = myCursorColor;
+  profileShowNicknameInput.checked = profilePrefs.showNickname;
+  profileShowCursorInput.checked = profilePrefs.showCursor;
+  profileShowOthersInput.checked = profilePrefs.showOthersCursors;
+  const rect = profileButton.getBoundingClientRect();
+  const popoverWidth = 220;
+  profilePopover.style.top = `${rect.bottom + 6}px`;
+  profilePopover.style.left = `${Math.min(rect.left, window.innerWidth - popoverWidth - 8)}px`;
+  profilePopover.hidden = false;
+  profileButton.setAttribute("aria-expanded", "true");
+}
+function closeProfilePopover() {
+  profilePopover.hidden = true;
+  profileButton.setAttribute("aria-expanded", "false");
+}
+profileButton.addEventListener("click", () => {
+  if (profilePopover.hidden) openProfilePopover();
+  else closeProfilePopover();
+});
+profilePopoverClose.addEventListener("click", closeProfilePopover);
+document.addEventListener("pointerdown", (event) => {
+  if (profilePopover.hidden) return;
+  if (profilePopover.contains(event.target) || profileButton.contains(event.target)) return;
+  closeProfilePopover();
+});
+window.addEventListener("keydown", (event) => {
+  if (!profilePopover.hidden && event.key === "Escape") closeProfilePopover();
+});
+
+profileSaveButton.addEventListener("click", async () => {
+  const nickname = profileNicknameInput.value.trim();
+  if (nickname.length === 0 || nickname.length > 20) return;
+  const ok = await saveProfile(nickname, profileColourInput.value);
+  if (!ok) return;
+  profilePrefs = {
+    showNickname: profileShowNicknameInput.checked,
+    showCursor: profileShowCursorInput.checked,
+    showOthersCursors: profileShowOthersInput.checked,
+  };
+  saveProfilePrefs();
+  // Independent of drawing permissions, and effective immediately -- a
+  // preference toggled off here must not wait for the next natural cursor
+  // event to take visible effect.
+  if (!profilePrefs.showCursor) hideMyCursor();
+  if (!profilePrefs.showOthersCursors) clearAllRemoteCursors();
+  closeProfilePopover();
+});
+
+// --- Cursor broadcasting ----------------------------------------------------
+const cursorUrl = `${opsUrl}/cursor`;
+const CURSOR_SEND_INTERVAL_MS = 100; // ~10/s: lightweight, still reads as live movement
+
+let lastCursorSendAt = 0;
+
+async function sendCursorUpdate(x, y) {
+  if (!profilePrefs.showCursor) return;
+  try {
+    await fetch(cursorUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ x, y, showCursor: true, showNickname: profilePrefs.showNickname }),
+    });
+  } catch {
+    // best-effort, same spirit as every other ephemeral network call here (sendHeartbeat, etc.)
+  }
+}
+
+async function hideMyCursor() {
+  try {
+    await fetch(cursorUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ showCursor: false }),
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+// --- Remote cursor rendering -------------------------------------------------
+// Purely visual DOM elements inside #remote-cursors (position: absolute,
+// pointer-events: none -- see styles.css) -- never drawn into #canvas's own
+// 2D context, so a cursor can never become, or be mistaken for, saved
+// artwork, and can never intercept a pointer event meant for the canvas.
+const remoteCursors = new Map(); // ownerId -> { el, dotEl, labelEl, x, y, lastSeen }
+const REMOTE_CURSOR_STALE_MS = 8000; // safety net for an abrupt disconnect that never sent cursor-hide
+
+function remoteCursorScreenPosition(x, y) {
+  // Same reference frame public/pixel-editor.js's own grid overlay already
+  // uses (canvas.offsetLeft/offsetTop, relative to #canvas-viewport's own
+  // positioned box): correct under panning for free, since an absolutely
+  // positioned descendant of the scrolling container scrolls with its
+  // content; correct under zoom because canvas.clientWidth/clientHeight
+  // already reflect the current zoomed CSS size.
+  return {
+    left: canvas.offsetLeft + x * canvas.clientWidth,
+    top: canvas.offsetTop + y * canvas.clientHeight,
+  };
+}
+
+function ensureRemoteCursorEntry(ownerId) {
+  let entry = remoteCursors.get(ownerId);
+  if (!entry) {
+    const el = document.createElement("div");
+    el.className = "remote-cursor";
+    const dotEl = document.createElement("div");
+    dotEl.className = "remote-cursor-dot";
+    const labelEl = document.createElement("span");
+    labelEl.className = "remote-cursor-label";
+    labelEl.hidden = true;
+    el.appendChild(dotEl);
+    el.appendChild(labelEl);
+    remoteCursorsContainer.appendChild(el);
+    entry = { el, dotEl, labelEl, x: 0, y: 0, lastSeen: 0 };
+    remoteCursors.set(ownerId, entry);
+  }
+  return entry;
+}
+
+function removeRemoteCursor(ownerId) {
+  const entry = remoteCursors.get(ownerId);
+  if (!entry) return;
+  entry.el.remove();
+  remoteCursors.delete(ownerId);
+}
+
+function clearAllRemoteCursors() {
+  for (const ownerId of [...remoteCursors.keys()]) removeRemoteCursor(ownerId);
+}
+
+function renderRemoteCursor(entry) {
+  const { left, top } = remoteCursorScreenPosition(entry.x, entry.y);
+  entry.el.style.left = `${left}px`;
+  entry.el.style.top = `${top}px`;
+}
+
+// Called whenever THIS viewer's own zoom changes -- a remote cursor's last
+// known normalized position never changes, but its on-screen pixel position
+// does, exactly like every drawn pixel's own on-screen position does.
+function repositionAllRemoteCursors() {
+  for (const entry of remoteCursors.values()) renderRemoteCursor(entry);
+}
+
+function handleRemoteCursorEvent(data) {
+  if (data.ownerId === myOwnerId) return; // never render an echo of my own cursor
+  if (!profilePrefs.showOthersCursors) return;
+  const entry = ensureRemoteCursorEntry(data.ownerId);
+  entry.x = data.x;
+  entry.y = data.y;
+  entry.lastSeen = Date.now();
+  entry.dotEl.style.background = data.color;
+  entry.labelEl.style.background = data.color;
+  if (data.nickname) {
+    entry.labelEl.textContent = data.nickname;
+    entry.labelEl.hidden = false;
+  } else {
+    entry.labelEl.hidden = true;
+  }
+  renderRemoteCursor(entry);
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ownerId, entry] of remoteCursors) {
+    if (now - entry.lastSeen > REMOTE_CURSOR_STALE_MS) removeRemoteCursor(ownerId);
+  }
+}, 3000);
 
 function pointerPos(event) {
   return toNormalized(event.clientX, event.clientY);
@@ -871,6 +1134,10 @@ function applyZoom(nextZoom) {
   canvas.style.height = `${DOCUMENT_HEIGHT * zoom}px`;
   zoomPercentDisplay.textContent = `${Math.round(zoom * 100)}%`;
   updateCursorSize();
+  // A remote cursor's own normalized position never changes here -- only
+  // its on-screen pixel position does, exactly like every drawn pixel's own
+  // on-screen position does.
+  repositionAllRemoteCursors();
 }
 
 // One-shot: computed against whatever the workspace viewport measures right
@@ -895,10 +1162,20 @@ canvas.addEventListener("pointerenter", (event) => {
 canvas.addEventListener("pointermove", (event) => {
   toolCursor.style.left = `${event.clientX}px`;
   toolCursor.style.top = `${event.clientY}px`;
+  // Throttled, independent of drawing: broadcasts this tab's own position to
+  // every other viewer of this exact document, regardless of which tool is
+  // selected or whether a gesture is in progress.
+  const now = Date.now();
+  if (now - lastCursorSendAt >= CURSOR_SEND_INTERVAL_MS) {
+    lastCursorSendAt = now;
+    const pos = pointerPos(event);
+    sendCursorUpdate(pos.x, pos.y);
+  }
 });
 
 canvas.addEventListener("pointerleave", () => {
   toolCursor.style.display = "none";
+  hideMyCursor();
 });
 
 // Deliberately does nothing to the document: a browser/workspace resize
@@ -1086,9 +1363,11 @@ requestAnimationFrame(applyFit);
 // startRealtimeSync's own `sync` handler is what actually populates allOps
 // and renders for the first time -- see the SSE section above for why there
 // is no separate GET request for the initial load any more.
+profileButton.hidden = false;
 loadMe().then(() => {
   startRealtimeSync();
   updateUndoRedoButtons();
+  maybeShowGuestSetup();
 });
 
 // Exists solely to animate the Public Canvas's fade -- a Private Room's

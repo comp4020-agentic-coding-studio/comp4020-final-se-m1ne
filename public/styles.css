@@ -1260,6 +1260,174 @@ body {
   justify-content: space-between;
 }
 
+/* --- Profile popover (freehand only) -------------------------------------------
+   Same chrome as #document-settings-popover -- shared tokens, same
+   header/body shape -- nickname, cursor colour, and the three visibility
+   toggles, reached through #profile-button instead of a permanent row. */
+#profile-popover {
+  position: fixed;
+  z-index: 30;
+  width: 220px;
+  background: var(--popover-bg);
+  border: 1px solid var(--popover-border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 6px var(--popover-shadow);
+  padding: 10px;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+
+#profile-popover[hidden] {
+  display: none;
+}
+
+#profile-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--divider);
+}
+
+#profile-popover-close {
+  border: none;
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+#profile-popover-close:hover {
+  background: var(--control-hover-bg);
+}
+
+#profile-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.profile-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#profile-nickname-input,
+#guest-setup-nickname-input {
+  padding: 4px 6px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.profile-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+#profile-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* --- One-time guest setup modal (freehand only) ---------------------------------
+   Same overlay+dialog chrome as #leave-room-overlay/#leave-room-dialog. */
+#guest-setup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+#guest-setup-overlay[hidden] {
+  display: none;
+}
+
+#guest-setup-dialog {
+  width: min(320px, calc(100vw - 32px));
+  background: var(--popover-bg);
+  border: 1px solid var(--popover-border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 6px var(--popover-shadow);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+#guest-setup-header {
+  font-weight: 600;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--divider);
+}
+
+#guest-setup-body {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#guest-setup-message {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+#guest-setup-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* --- Remote collaborator cursors (freehand only) --------------------------------
+   Purely visual, created/positioned/removed entirely by public/app.js;
+   pointer-events: none so a cursor marker can never intercept input meant
+   for the canvas underneath it. */
+#remote-cursors {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.remote-cursor {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transform: translate(-2px, -2px);
+  white-space: nowrap;
+}
+
+.remote-cursor-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+  flex-shrink: 0;
+}
+
+.remote-cursor-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.4);
+}
+
 /* --- Continuous zoom slider ---------------------------------------------------
    Logarithmically mapped (public/pixeldoc.js's zoomToSliderPosition/
    sliderPositionToZoom) so the full 10%-800%/3200% range is usable in one

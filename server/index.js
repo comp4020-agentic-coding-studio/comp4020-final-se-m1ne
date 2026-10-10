@@ -8,12 +8,13 @@ import {
   abandonRedoBranch,
   createRoom,
   getActiveRoom,
-  getGuestNickname,
+  getGuestProfile,
   insertOp,
   leavePresence,
   listOps,
   recordHeartbeat,
   redoLatestOwnOp,
+  setGuestCursorColor,
   setGuestNickname,
   setRoomBackground,
   undoLatestOwnOp,
@@ -47,7 +48,8 @@ app.get("/api/ops", (req, res) => {
 // check anywhere in this file.
 app.get("/api/me", (req, res) => {
   const ownerId = getOrSetAnonId(req, res);
-  res.json({ ownerId, nickname: getGuestNickname(ownerId) });
+  const { nickname, cursorColor } = getGuestProfile(ownerId);
+  res.json({ ownerId, nickname, cursorColor });
 });
 
 const NICKNAME_MAX_LENGTH = 24;
@@ -61,6 +63,10 @@ function normalizeNickname(raw) {
   if (trimmed.length === 0 || trimmed.length > NICKNAME_MAX_LENGTH) return null;
   if (/[\u0000-\u001f\u007f]/.test(trimmed)) return null; // no control/formatting characters
   return trimmed;
+}
+
+function isValidHexColor(value) {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
 }
 
 // Sets or updates the caller's own nickname -- cosmetic display metadata
@@ -81,6 +87,31 @@ app.post("/api/me/nickname", (req, res) => {
   }
   setGuestNickname(ownerId, nickname);
   res.status(200).json({ ownerId, nickname });
+});
+
+// The one-time guest setup / Profile popover's own save action: nickname and
+// cursor colour together, in one request, using exactly the same validation
+// as the nickname-only route above plus a hex-colour check (the same pattern
+// validateBackground's own custom-colour check already uses). Still cosmetic
+// metadata only -- never read by any ownership/erase/undo check, same as
+// every other route in this section.
+app.post("/api/me/profile", (req, res) => {
+  const ownerId = getOrSetAnonId(req, res);
+  const nickname = normalizeNickname(req.body?.nickname);
+  if (nickname === null) {
+    res
+      .status(400)
+      .json({ error: `nickname must be a non-empty string of at most ${NICKNAME_MAX_LENGTH} characters` });
+    return;
+  }
+  const cursorColor = req.body?.cursorColor;
+  if (!isValidHexColor(cursorColor)) {
+    res.status(400).json({ error: "cursorColor must be a '#rrggbb' string" });
+    return;
+  }
+  setGuestNickname(ownerId, nickname);
+  setGuestCursorColor(ownerId, cursorColor.toLowerCase());
+  res.status(200).json({ ownerId, nickname, cursorColor: cursorColor.toLowerCase() });
 });
 
 function isPoint(value) {
@@ -183,6 +214,9 @@ app.post("/api/ops/erase", (req, res) => handleErase(req, res, null));
 // defined later in this file, called here exactly like the pixel stream
 // route already calls startPixelStream before its own textual definition).
 app.get("/api/ops/stream", (req, res) => startFreehandStream(req, res, null));
+
+// Public freehand cursor updates -- see handleFreehandCursor below (hoisted).
+app.post("/api/ops/cursor", (req, res) => handleFreehandCursor(req, res, null));
 
 // --- Pixel-art documents -----------------------------------------------------
 // A second, parallel op family, deliberately NOT layered onto the existing
@@ -461,10 +495,12 @@ function isValidCursorCoordinate(value, limit) {
 // from the same server-derived anon_id cookie every draw/erase route already
 // trusts -- there is no ownerId or nickname field anywhere in this body that
 // could ever be read as one; the nickname shown, if any, is always looked up
-// server-side from this owner's own getGuestNickname record, never accepted
-// from the client. showCursor:false needs no position at all -- it is the
-// explicit "hide my cursor" signal (leaving the canvas, or a user's own
-// privacy toggle), broadcasting cursor-hide and nothing else.
+// server-side from this owner's own getGuestProfile record, never accepted
+// from the client, and so is the cursor colour (falling back to the
+// deterministic hash-derived one for any guest who never completed the
+// one-time setup / Profile popover). showCursor:false needs no position at
+// all -- it is the explicit "hide my cursor" signal (leaving the canvas, or
+// a user's own privacy toggle), broadcasting cursor-hide and nothing else.
 function handlePixelCursor(req, res, roomId, width, height) {
   const ownerId = getOrSetAnonId(req, res);
   const { x, y, showCursor, showNickname } = req.body ?? {};
@@ -489,13 +525,51 @@ function handlePixelCursor(req, res, roomId, width, height) {
     return;
   }
 
-  const cursor = { ownerId, x, y, color: cursorColorForOwner(ownerId) };
-  if (showNickname) {
-    const nickname = getGuestNickname(ownerId);
-    if (nickname) cursor.nickname = nickname; // omitted entirely if this owner has never set one -- never a fabricated name
-  }
+  const profile = getGuestProfile(ownerId);
+  const cursor = { ownerId, x, y, color: profile.cursorColor ?? cursorColorForOwner(ownerId) };
+  if (showNickname && profile.nickname) cursor.nickname = profile.nickname; // omitted entirely if never set -- never a fabricated name
 
   broadcastPixelEvent(roomId, "cursor", cursor);
+  res.status(200).json({ ok: true });
+}
+
+// Freehand equivalent of handlePixelCursor above -- same contract, except a
+// freehand document has no fixed width/height to bound coordinates against
+// (its own draw/erase ops aren't bounded either; see isPoint/pointsValid),
+// so a cursor position only needs to be finite, not inside a specific range.
+function isFiniteCoordinate(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function handleFreehandCursor(req, res, roomId) {
+  const ownerId = getOrSetAnonId(req, res);
+  const { x, y, showCursor, showNickname } = req.body ?? {};
+
+  if (typeof showCursor !== "boolean") {
+    res.status(400).json({ error: "showCursor must be a boolean" });
+    return;
+  }
+
+  if (!showCursor) {
+    broadcastFreehandEvent(roomId, "cursor-hide", { ownerId });
+    res.status(200).json({ ok: true });
+    return;
+  }
+
+  if (typeof showNickname !== "boolean") {
+    res.status(400).json({ error: "showNickname must be a boolean" });
+    return;
+  }
+  if (!isFiniteCoordinate(x) || !isFiniteCoordinate(y)) {
+    res.status(400).json({ error: "x and y must be finite numbers" });
+    return;
+  }
+
+  const profile = getGuestProfile(ownerId);
+  const cursor = { ownerId, x, y, color: profile.cursorColor ?? cursorColorForOwner(ownerId) };
+  if (showNickname && profile.nickname) cursor.nickname = profile.nickname;
+
+  broadcastFreehandEvent(roomId, "cursor", cursor);
   res.status(200).json({ ok: true });
 }
 
@@ -827,6 +901,21 @@ app.get("/api/rooms/:code/ops/stream", (req, res) => {
     return;
   }
   startFreehandStream(req, res, code);
+});
+
+// Room-scoped freehand cursor updates -- gated exactly like the routes above.
+app.post("/api/rooms/:code/ops/cursor", (req, res) => {
+  const code = normalizeRoomCode(req.params.code);
+  const room = getActiveRoom(code);
+  if (!room) {
+    res.status(404).json({ error: "no such room" });
+    return;
+  }
+  if (isPixelRoom(room)) {
+    res.status(400).json({ error: "this room is a pixel-art studio; use /api/rooms/:code/pixels/cursor" });
+    return;
+  }
+  handleFreehandCursor(req, res, code);
 });
 
 // --- Pixel-art Private studios ----------------------------------------------

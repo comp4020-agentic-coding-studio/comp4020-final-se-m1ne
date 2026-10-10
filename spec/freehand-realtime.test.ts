@@ -210,3 +210,38 @@ it("the Public freehand stream and a Private freehand room's stream never leak i
   }
   expect(sawRoomOpOnPublic).toBe(false);
 });
+
+describe("ephemeral freehand cursors", () => {
+  it("a visible cursor broadcasts position and a colour, with no nickname field when showNickname is false", async () => {
+    const code = await createFreehandRoom();
+    const stream = await connect(`/api/rooms/${code}/ops/stream`);
+    await stream.next(); // sync
+
+    const res = await postJson(`/api/rooms/${code}/ops/cursor`, { x: 0.3, y: 0.6, showCursor: true, showNickname: false });
+    expect(res.status).toBe(200);
+
+    const cursor = await stream.next();
+    expect(cursor.event).toBe("cursor");
+    expect(cursor.data.x).toBe(0.3);
+    expect(cursor.data.y).toBe(0.6);
+    expect(typeof cursor.data.color).toBe("string");
+    expect(cursor.data.nickname).toBeUndefined();
+  });
+
+  it("showCursor:false broadcasts cursor-hide and needs no position", async () => {
+    const code = await createFreehandRoom();
+    const stream = await connect(`/api/rooms/${code}/ops/stream`);
+    await stream.next();
+    const res = await postJson(`/api/rooms/${code}/ops/cursor`, { showCursor: false });
+    expect(res.status).toBe(200);
+    const ev = await stream.next();
+    expect(ev.event).toBe("cursor-hide");
+  });
+
+  it("a pixel-art room rejects the freehand cursor route (400)", async () => {
+    const created = await postJson("/api/rooms", { resolution: 32 });
+    const code = created.body.code as string;
+    const res = await postJson(`/api/rooms/${code}/ops/cursor`, { showCursor: false });
+    expect(res.status).toBe(400);
+  });
+});

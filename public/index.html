@@ -49,6 +49,20 @@
           </button>
         </div>
         <div id="action-row-right" class="action-group">
+          <!-- Freehand-only (public/app.js reveals and wires this; never
+               touched by public/pixel-editor.js, so it stays hidden for an
+               existing pixel-art room, matching "no pixel drawing changes"). -->
+          <button
+            id="profile-button"
+            type="button"
+            class="app-button"
+            hidden
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            aria-controls="profile-popover"
+          >
+            Profile
+          </button>
           <button
             id="theme-toggle"
             type="button"
@@ -250,6 +264,12 @@
                contaminate stored artwork. Unused (left hidden) by
                public/app.js. -->
           <div id="pixel-grid-overlay" aria-hidden="true" hidden></div>
+          <!-- Freehand-only (public/pixel-editor.js never adds anything here):
+               one small absolutely-positioned marker per OTHER participant
+               currently showing a cursor, created/moved/removed entirely by
+               public/app.js. Never drawn into #canvas's own 2D context, so a
+               cursor can never become, or be mistaken for, saved artwork. -->
+          <div id="remote-cursors" aria-hidden="true"></div>
         </div>
       </div>
 
@@ -399,6 +419,69 @@
                temporary low-zoom suppression public/pixel-editor.js also
                applies, which never changes this toggle's own state. -->
           <button type="button" id="grid-toggle" class="app-button" aria-pressed="true">On</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Freehand-only (public/app.js shows and wires all of this; never
+         touched by public/pixel-editor.js). Edits the same nickname/cursor-
+         colour/visibility preferences the one-time setup modal below
+         collects, reusing the exact same POST /api/me/profile endpoint. -->
+    <div id="profile-popover" role="dialog" aria-label="Profile settings" hidden>
+      <div id="profile-popover-header">
+        <span>Profile</span>
+        <button type="button" id="profile-popover-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="profile-popover-body">
+        <label class="profile-field">
+          <span class="group-label">Nickname</span>
+          <input type="text" id="profile-nickname-input" maxlength="20" aria-label="Nickname" />
+        </label>
+        <label class="profile-field">
+          <span class="group-label">Cursor colour</span>
+          <input type="color" id="profile-colour-input" aria-label="Cursor colour" />
+        </label>
+        <label class="profile-checkbox-row">
+          <input type="checkbox" id="profile-show-nickname" />
+          Show my nickname
+        </label>
+        <label class="profile-checkbox-row">
+          <input type="checkbox" id="profile-show-cursor" />
+          Show my cursor to others
+        </label>
+        <label class="profile-checkbox-row">
+          <input type="checkbox" id="profile-show-others" />
+          Show others' cursors
+        </label>
+        <div id="profile-popover-actions">
+          <button type="button" id="profile-save-button" class="app-button">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Freehand-only, one-time: shown by public/app.js on first visit (no
+         nickname on record yet -- GET /api/me's own nickname is null) and
+         never again afterward, since completing it always sets one. Reuses
+         the SAME two fields and POST /api/me/profile the Profile popover
+         above does; this is just its first-run presentation. -->
+    <div id="guest-setup-overlay" hidden>
+      <div id="guest-setup-dialog" role="dialog" aria-labelledby="guest-setup-title">
+        <div id="guest-setup-header">
+          <span id="guest-setup-title">Welcome</span>
+        </div>
+        <div id="guest-setup-body">
+          <p id="guest-setup-message">Choose a nickname and cursor colour so others can see who's drawing.</p>
+          <label class="profile-field">
+            <span class="group-label">Nickname</span>
+            <input type="text" id="guest-setup-nickname-input" maxlength="20" placeholder="Your name" aria-label="Nickname" />
+          </label>
+          <label class="profile-field">
+            <span class="group-label">Cursor colour</span>
+            <input type="color" id="guest-setup-colour-input" value="#1e88e5" aria-label="Cursor colour" />
+          </label>
+          <div id="guest-setup-actions">
+            <button type="button" id="guest-setup-confirm" class="app-button">Get Started</button>
+          </div>
         </div>
       </div>
     </div>

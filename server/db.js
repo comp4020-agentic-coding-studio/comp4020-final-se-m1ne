@@ -185,6 +185,16 @@ db.exec(`
   )
 `);
 
+// Additive, idempotent, like every other migration in this file. NULL means
+// this owner has never chosen a cursor colour -- the caller (server/
+// index.js's cursor handlers) falls back to the existing deterministic
+// hash-derived colour in that case, exactly as it always did before this
+// column existed, so a guest who never opens the one-time setup (or an old
+// row from before this column existed) is completely unaffected.
+if (!columnExists("guests", "cursor_color")) {
+  db.exec("ALTER TABLE guests ADD COLUMN cursor_color TEXT");
+}
+
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 export const STALE_TIMEOUT_MS = 90_000;
 export const ROOM_EMPTY_EXPIRY_MS = 24 * 60 * 60 * 1000;
@@ -661,4 +671,26 @@ export function getGuestNickname(ownerId) {
 export function setGuestNickname(ownerId, nickname, now = Date.now()) {
   upsertGuestStmt.run(ownerId, nickname, now);
   return nickname;
+}
+
+const selectGuestProfileStmt = db.prepare("SELECT nickname, cursor_color FROM guests WHERE owner_id = ?");
+const updateGuestCursorColorStmt = db.prepare("UPDATE guests SET cursor_color = ? WHERE owner_id = ?");
+
+// Both fields a guest can set in the one-time setup / Profile popover.
+// cursorColor is null for any guest who has never completed that setup
+// (including every pre-existing row from before this column existed) --
+// the caller falls back to the deterministic hash-derived colour in that
+// case, never a fabricated default stored here.
+export function getGuestProfile(ownerId) {
+  const row = selectGuestProfileStmt.get(ownerId);
+  return row ? { nickname: row.nickname, cursorColor: row.cursor_color } : { nickname: null, cursorColor: null };
+}
+
+// UPDATE, not upsert: a guest row must already exist (created by
+// setGuestNickname, always called first in the same one-time-setup request)
+// before its cursor colour can be set -- there is no scenario where a colour
+// is chosen without a nickname alongside it.
+export function setGuestCursorColor(ownerId, cursorColor) {
+  updateGuestCursorColorStmt.run(cursorColor, ownerId);
+  return cursorColor;
 }
