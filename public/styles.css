@@ -919,6 +919,16 @@ body {
     linear-gradient(-45deg, transparent 75%, #3a3a40 75%);
 }
 
+/* Sized and positioned in JS (public/app.js's positionRemoteStrokePreview)
+   to track #canvas's own CSS box exactly, at any zoom/pan -- same technique
+   #pixel-grid-overlay below uses, just for a <canvas> instead of a
+   background-image. pointer-events: none so it can never intercept input
+   meant for the real canvas underneath it. */
+#remote-stroke-preview {
+  position: absolute;
+  pointer-events: none;
+}
+
 /* Sized and positioned in JS (pixel-editor.js's updateGridOverlay) to track
    the canvas's own CSS box exactly at the current zoom -- shown only above a
    zoom threshold where individual cells are large enough for a grid to help

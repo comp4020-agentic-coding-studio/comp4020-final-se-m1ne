@@ -112,25 +112,6 @@ const documentSettingsBody = document.getElementById("document-settings-body");
 const documentDimensions = document.getElementById("document-dimensions");
 const gridToggle = document.getElementById("grid-toggle");
 
-// Theme is a local UI preference only -- never sent to the server, never part
-// of collaborative state. Identical in spirit to public/app.js's own theme
-// code (duplicated rather than shared: it is a small, stable ~10 lines, and
-// extracting a shared module for it alone was judged not worth touching the
-// otherwise-untouched legacy file for).
-function syncThemeToggleUI() {
-  const theme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
-  themeToggle.textContent = theme === "dark" ? "Dark" : "Light";
-  themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
-  themeToggle.setAttribute("aria-label", `Toggle theme, currently ${theme}`);
-}
-themeToggle.addEventListener("click", () => {
-  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next;
-  localStorage.setItem("theme", next);
-  syncThemeToggleUI();
-});
-syncThemeToggleUI();
-
 const roomCode = location.pathname.match(/^\/room\/([^/]+)/)?.[1]?.toUpperCase() ?? null;
 
 async function main() {
@@ -163,6 +144,31 @@ async function main() {
 }
 
 function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
+  // Theme is a local, per-page-load UI preference only -- never sent to the
+  // server, never part of collaborative state, never persisted across
+  // reloads (every load re-initializes from the system's own
+  // prefers-color-scheme; see index.html's own inline head script -- a
+  // manual toggle here only ever affects the CURRENT page view). Wired only
+  // inside bootPixelEditor, which runs ONLY for the "pixel" mode branch of
+  // main() below, never for "legacy" (which hands off to app.js entirely,
+  // app.js's own near-identical theme code taking over exclusively) --
+  // previously this was wired unconditionally at module top level, so it
+  // ran for EVERY page regardless of dispatch, and once a legacy page also
+  // ran app.js's own copy, the two listeners toggled the theme back and
+  // forth on every single click, cancelling out to no visible change at
+  // all. One listener per page, never two.
+  function syncThemeToggleUI() {
+    const theme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+    themeToggle.textContent = theme === "dark" ? "Dark" : "Light";
+    themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
+    themeToggle.setAttribute("aria-label", `Toggle theme, currently ${theme}`);
+  }
+  themeToggle.addEventListener("click", () => {
+    document.documentElement.dataset.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    syncThemeToggleUI();
+  });
+  syncThemeToggleUI();
+
   const isPublicPixelWall = roomCode === null;
   // One uniform ceiling for every tool/mode combination -- never a
   // scope-dependent cap (see server/index.js's/pixeldoc.js's own

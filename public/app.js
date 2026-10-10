@@ -53,14 +53,22 @@ const guestSetupNicknameInput = document.getElementById("guest-setup-nickname-in
 const guestSetupColourInput = document.getElementById("guest-setup-colour-input");
 const guestSetupConfirmButton = document.getElementById("guest-setup-confirm");
 const remoteCursorsContainer = document.getElementById("remote-cursors");
+const remoteStrokePreviewCanvas = document.getElementById("remote-stroke-preview");
+const remoteStrokePreviewCtx = remoteStrokePreviewCanvas.getContext("2d");
 
-// Theme is a local UI preference only -- never sent to the server, never
-// part of collaborative state (see server/db.js, untouched by this). The
-// inline <head> script in index.html already resolved the initial value
-// (saved localStorage choice, falling back to prefers-color-scheme) onto
-// document.documentElement.dataset.theme before this module even runs, so
-// this is only responsible for keeping the toggle button's own display in
-// sync and persisting any future explicit choice.
+// Theme is a local, per-page-load UI preference only -- never sent to the
+// server, never part of collaborative state (see server/db.js, untouched by
+// this), and never persisted across reloads: the inline <head> script in
+// index.html always initializes document.documentElement.dataset.theme from
+// the system's own prefers-color-scheme before this module even runs, so a
+// manual toggle here only ever affects the CURRENT page view, never a future
+// one -- a previous manual choice must never override the system default on
+// the next load. This file's own listener is the ONLY one ever attached to
+// #theme-toggle for a legacy page: public/pixel-editor.js wires an
+// equivalent copy, but only inside its own bootPixelEditor (the "pixel"
+// mode branch), which this file's import path (the "legacy" branch) never
+// reaches -- the two used to both run unconditionally, which doubled every
+// click back to no visible change at all.
 function syncThemeToggleUI() {
   const theme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
   themeToggle.textContent = theme === "dark" ? "Dark" : "Light";
@@ -69,9 +77,7 @@ function syncThemeToggleUI() {
 }
 
 themeToggle.addEventListener("click", () => {
-  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next;
-  localStorage.setItem("theme", next);
+  document.documentElement.dataset.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   syncThemeToggleUI();
 });
 
@@ -214,6 +220,12 @@ let myRedoCount = 0;
 function initCanvasBackingStore() {
   canvas.width = DOCUMENT_WIDTH;
   canvas.height = DOCUMENT_HEIGHT;
+  // Same resolution as #canvas itself -- a point painted here at normalized
+  // (x, y) via renderPathOnLayer therefore lands at the exact same pixel a
+  // real op's replay would, so a reconciled preview-to-authoritative handoff
+  // never visibly shifts.
+  remoteStrokePreviewCanvas.width = DOCUMENT_WIDTH;
+  remoteStrokePreviewCanvas.height = DOCUMENT_HEIGHT;
 }
 
 // Points are stored normalized [0,1], relative to the document, not to
@@ -459,6 +471,12 @@ function startRealtimeSync() {
       opsByOwner.get(op.ownerId).push(op);
     }
     rebuildAllLayers();
+    // A fresh snapshot (initial connect or a reconnect) has no notion of
+    // whatever in-progress strokes were mid-flight before it -- any preview
+    // still showing at this point is already stale by definition, and the
+    // owner it belongs to will simply repaint it from scratch on its next
+    // "stroke" broadcast if the gesture is in fact still going.
+    clearAllRemoteStrokePreviews();
   });
 
   source.addEventListener("op", (event) => {
@@ -476,11 +494,22 @@ function startRealtimeSync() {
     // layer rebuilt, not every layer (rebuildAllLayers), which is the whole
     // reason ops are already kept per-owner.
     if (data.ownerId !== myOwnerId) {
+      // The authoritative stroke has landed -- clear its temporary preview
+      // (if any) in this same synchronous turn, immediately before painting
+      // the real thing, so there is no frame in between where neither is
+      // visible.
+      clearRemoteStrokePreview(data.ownerId);
       rebuildLayerFromOps(data.ownerId);
       repaintVisibleCanvas();
     }
     updateUndoRedoButtons();
   });
+
+  // Ephemeral, in-progress stroke previews -- never persisted, never
+  // touching allOps/opsByOwner/any real layer. See
+  // handleRemoteStrokeEvent/handleRemoteStrokeEndEvent above.
+  source.addEventListener("stroke", (event) => handleRemoteStrokeEvent(JSON.parse(event.data)));
+  source.addEventListener("stroke-end", (event) => handleRemoteStrokeEndEvent(JSON.parse(event.data)));
 
   // Undo/redo are rare next to the per-stroke frequency of "op", so there is
   // no need for a second, more surgical reconciliation path here: loadOps()
@@ -648,6 +677,61 @@ async function hideMyCursor() {
   }
 }
 
+// --- In-progress stroke broadcasting -----------------------------------------
+// Lets other viewers see this gesture growing before pointerup, without
+// persisting a single intermediate segment: every call here is the exact
+// same ephemeral, best-effort POST pattern as sendCursorUpdate/hideMyCursor
+// above, to a route (handleFreehandStrokePreview, server/index.js) that never
+// touches insertOp or the ops table. Throttled independently of
+// renderCurrentDelta's own per-animation-frame cadence (queueFrame can run
+// far more often than this needs to send over the network) -- the FULL
+// accumulated points-so-far are sent every time, not just the newest delta,
+// so a single missed/delayed broadcast is harmless: the next one is already a
+// complete, self-sufficient snapshot of the stroke so far, the same
+// always-a-full-snapshot philosophy startRealtimeSync's own `sync` frame uses.
+const strokeUrl = `${opsUrl}/stroke`;
+const STROKE_SEND_INTERVAL_MS = 120;
+let lastStrokeSendAt = 0;
+
+async function sendStrokePreview(force) {
+  if (!current) return;
+  const now = Date.now();
+  if (!force && now - lastStrokeSendAt < STROKE_SEND_INTERVAL_MS) return;
+  lastStrokeSendAt = now;
+  try {
+    await fetch(strokeUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        active: true,
+        kind: current.kind,
+        color: current.color,
+        size: current.size,
+        points: current.points,
+      }),
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+// Sent the instant a gesture ends locally, whether or not persistGesture's
+// own save goes on to succeed -- see handleRemoteStrokeEndEvent's own comment
+// for how a remote viewer reconciles this against the real "op" event without
+// a visible gap, and how a failed save still gets its stale preview cleaned
+// up even though no "op" ever arrives to supersede it.
+async function endStrokePreview() {
+  try {
+    await fetch(strokeUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active: false }),
+    });
+  } catch {
+    // best-effort
+  }
+}
+
 // --- Remote cursor rendering -------------------------------------------------
 // Purely visual DOM elements inside #remote-cursors (position: absolute,
 // pointer-events: none -- see styles.css) -- never drawn into #canvas's own
@@ -737,6 +821,97 @@ setInterval(() => {
   }
 }, 3000);
 
+// --- Remote in-progress stroke previews -------------------------------------
+// Renders OTHER participants' strokes while they're still being dragged, onto
+// the dedicated #remote-stroke-preview overlay canvas -- never #canvas's own
+// 2D context, allOps, opsByOwner, or any owner's real layer canvas. By
+// construction there is no code path through which a preview could become, or
+// be mistaken for, persisted artwork: the only things that ever add a real op
+// to allOps are the "op" SSE handler and persistGesture below, both
+// completely untouched by any of this. See handleFreehandStrokePreview in
+// server/index.js for the matching ephemeral broadcast side (same
+// never-persisted pattern as cursors, above).
+const remoteStrokePreviews = new Map(); // ownerId -> { kind, color, size, points, lastSeen, endTimer }
+const STROKE_PREVIEW_STALE_MS = 4000; // safety net for a disconnect mid-stroke that never sends stroke-end
+const STROKE_PREVIEW_END_GRACE_MS = 1500; // grace window for the real "op" to arrive and supersede this first
+
+function repaintRemoteStrokePreviews() {
+  remoteStrokePreviewCtx.clearRect(0, 0, remoteStrokePreviewCanvas.width, remoteStrokePreviewCanvas.height);
+  for (const preview of remoteStrokePreviews.values()) {
+    if (preview.kind === "erase") {
+      // This overlay starts (and stays) fully transparent, so there is
+      // nothing underneath an in-progress erase for destination-out to
+      // reveal here the way it would on a real layer -- shown instead as a
+      // visible, clearly-temporary "working here" indicator, never an actual
+      // erase, so it can never touch anyone's real content.
+      remoteStrokePreviewCtx.save();
+      remoteStrokePreviewCtx.globalAlpha = 0.35;
+      renderPathOnLayer(remoteStrokePreviewCtx, "draw", "#9e9e9e", preview.size, preview.points);
+      remoteStrokePreviewCtx.restore();
+    } else {
+      renderPathOnLayer(remoteStrokePreviewCtx, "draw", preview.color, preview.size, preview.points);
+    }
+  }
+}
+
+function clearRemoteStrokePreview(ownerId) {
+  const preview = remoteStrokePreviews.get(ownerId);
+  if (!preview) return;
+  if (preview.endTimer !== null) clearTimeout(preview.endTimer);
+  remoteStrokePreviews.delete(ownerId);
+  repaintRemoteStrokePreviews();
+}
+
+function clearAllRemoteStrokePreviews() {
+  for (const ownerId of [...remoteStrokePreviews.keys()]) clearRemoteStrokePreview(ownerId);
+}
+
+function handleRemoteStrokeEvent(data) {
+  if (data.ownerId === myOwnerId) return; // never preview an echo of my own in-progress gesture
+  let preview = remoteStrokePreviews.get(data.ownerId);
+  if (!preview) {
+    preview = { endTimer: null };
+    remoteStrokePreviews.set(data.ownerId, preview);
+  } else if (preview.endTimer !== null) {
+    // Fresh progress for this owner supersedes any earlier stroke-end grace
+    // timer -- that timer belonged to a previous (already-finished) stroke,
+    // and must never fire against this new, still-in-progress one.
+    clearTimeout(preview.endTimer);
+    preview.endTimer = null;
+  }
+  preview.kind = data.kind;
+  preview.color = data.color;
+  preview.size = data.size;
+  preview.points = data.points;
+  preview.lastSeen = Date.now();
+  repaintRemoteStrokePreviews();
+}
+
+// The drawing client sends stroke-end the instant its own gesture ends,
+// whether or not persistence goes on to succeed (see endGesture/
+// endStrokePreview below). Rather than clear the preview immediately here --
+// which would blank it out right before the real stroke appears -- arm a
+// short grace timer instead: the normal "op" broadcast almost always arrives
+// within this window (see startRealtimeSync's "op" listener, which clears any
+// pending preview the instant it does) and replaces the preview with the
+// authoritative committed stroke in the very same synchronous turn, so there
+// is no visible gap or flicker. Only when nothing ever supersedes it --
+// persistGesture failed, or the drawing client disconnected outright -- does
+// this timer actually fire, which is what keeps a failed or abandoned stroke
+// from leaving a permanent ghost on every other viewer's screen.
+function handleRemoteStrokeEndEvent(data) {
+  const preview = remoteStrokePreviews.get(data.ownerId);
+  if (!preview || preview.endTimer !== null) return;
+  preview.endTimer = setTimeout(() => clearRemoteStrokePreview(data.ownerId), STROKE_PREVIEW_END_GRACE_MS);
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ownerId, preview] of remoteStrokePreviews) {
+    if (now - preview.lastSeen > STROKE_PREVIEW_STALE_MS) clearRemoteStrokePreview(ownerId);
+  }
+}, 2000);
+
 function pointerPos(event) {
   return toNormalized(event.clientX, event.clientY);
 }
@@ -798,6 +973,7 @@ function renderCurrentDelta() {
     // see repaintVisibleCanvas's own comment for why that's still exact.
     repaintVisibleCanvas(deltaRegionPixels(delta, current.size));
   }
+  sendStrokePreview(false);
 }
 
 // The pixel-space rectangle a stroke delta could possibly have painted into:
@@ -897,6 +1073,11 @@ function endGesture() {
   if (!current) return;
   cancelFrame();
   renderCurrentDelta(); // flush any points accumulated since the last rendered frame
+  // One final, forced (non-throttled) preview send with the now-complete
+  // points, while `current` still holds them -- guarantees remote viewers'
+  // preview shows the exact final shape right before it gets reconciled away
+  // by the real "op" broadcast persistGesture's save triggers below.
+  sendStrokePreview(true);
   // The per-frame erase preview only ever repaints the delta's own region
   // (see renderCurrentDelta); reconcile with one full, authoritative repaint
   // at gesture end so nothing has drifted. This runs once per gesture, not
@@ -904,6 +1085,11 @@ function endGesture() {
   if (current.kind === "erase") repaintVisibleCanvas();
   const finished = current;
   current = null;
+  // Tells every other viewer this stroke is no longer in progress, whether or
+  // not persistGesture's own save (below) goes on to succeed -- see
+  // handleRemoteStrokeEndEvent's own comment for why this never races the
+  // real "op" broadcast into a visible gap or a stuck ghost preview.
+  endStrokePreview();
   // Handed off to pendingOps before persistGesture's first await: a repaint
   // triggered by anything (the fade tick, a resize) between here and
   // persistGesture's op landing in allOps must still find this gesture
@@ -1128,6 +1314,21 @@ function updateCursorSize() {
 const FIT_MARGIN_PX = 24;
 let zoom = 1;
 
+// Keeps #remote-stroke-preview's CSS box in exact lockstep with #canvas's own
+// (same offset within their shared positioning context #canvas-viewport, same
+// displayed size) -- the same offsetLeft/offsetTop/clientWidth/clientHeight
+// #remote-cursors' own remoteCursorScreenPosition already reads for the same
+// reason. Needed because, unlike #remote-cursors (one absolutely-positioned
+// dot per owner, each placed individually), this overlay is itself a scaled
+// <canvas> whose entire box must match #canvas's pixel-for-pixel for a
+// normalized point painted into it to land on the same screen pixel.
+function positionRemoteStrokePreview() {
+  remoteStrokePreviewCanvas.style.left = `${canvas.offsetLeft}px`;
+  remoteStrokePreviewCanvas.style.top = `${canvas.offsetTop}px`;
+  remoteStrokePreviewCanvas.style.width = `${canvas.clientWidth}px`;
+  remoteStrokePreviewCanvas.style.height = `${canvas.clientHeight}px`;
+}
+
 function applyZoom(nextZoom) {
   zoom = clampZoom(nextZoom);
   canvas.style.width = `${DOCUMENT_WIDTH * zoom}px`;
@@ -1138,6 +1339,7 @@ function applyZoom(nextZoom) {
   // its on-screen pixel position does, exactly like every drawn pixel's own
   // on-screen position does.
   repositionAllRemoteCursors();
+  positionRemoteStrokePreview();
 }
 
 // One-shot: computed against whatever the workspace viewport measures right

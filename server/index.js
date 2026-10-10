@@ -573,6 +573,62 @@ function handleFreehandCursor(req, res, roomId) {
   res.status(200).json({ ok: true });
 }
 
+// --- Ephemeral in-progress stroke previews -----------------------------------
+// Lets a remote viewer see a freehand stroke grow continuously while it's
+// still being dragged, instead of only once handleDraw/handleErase's own
+// authoritative "op" broadcast lands on pointerup. Exactly the same
+// ephemeral, never-persisted pub/sub pattern as handleFreehandCursor above
+// (same opSubscribers map via broadcastFreehandEvent, same scope key, same
+// "never touches insertOp/the ops table" guarantee) -- so there is no code
+// path by which a preview could ever end up persisted, undo/redo-able, or
+// mistaken for real artwork. `active: false` is the drawing client's own
+// "I'm done (however this turns out)" signal, sent the instant its gesture
+// ends locally, win or lose -- see public/app.js's endGesture/endStrokePreview
+// for how a remote viewer reconciles this against the real "op" event without
+// a visible gap.
+function handleFreehandStrokePreview(req, res, roomId) {
+  const ownerId = getOrSetAnonId(req, res);
+  const { active } = req.body ?? {};
+
+  if (active === false) {
+    broadcastFreehandEvent(roomId, "stroke-end", { ownerId });
+    res.status(200).json({ ok: true });
+    return;
+  }
+
+  const { kind, color, size, points } = req.body ?? {};
+  if (kind !== "draw" && kind !== "erase") {
+    res.status(400).json({ error: "kind must be 'draw' or 'erase'" });
+    return;
+  }
+  if (kind === "draw" && typeof color !== "string") {
+    res.status(400).json({ error: "a draw preview needs a color" });
+    return;
+  }
+  const sizeValid = typeof size === "number" && Number.isFinite(size) && size > 0;
+  if (!sizeValid || !pointsValid(points)) {
+    res.status(400).json({ error: "a stroke preview needs a positive size and at least one {x, y} point" });
+    return;
+  }
+
+  // Never persisted, so never ownership-checked against existing artwork the
+  // way a real draw/erase op is -- that safety doesn't come from validation
+  // here, it comes from this data never reaching insertOp or opsByOwner on
+  // any client at all (see repaintRemoteStrokePreviews in public/app.js,
+  // which renders previews onto a dedicated overlay canvas, never #canvas's
+  // own 2D context or any owner's real layer).
+  broadcastFreehandEvent(roomId, "stroke", {
+    ownerId,
+    kind,
+    color: kind === "erase" ? null : color,
+    size,
+    points,
+  });
+  res.status(200).json({ ok: true });
+}
+
+app.post("/api/ops/stroke", (req, res) => handleFreehandStrokePreview(req, res, null));
+
 // Persists one pixel-art draw gesture as a single append-only op, under the
 // caller's own server-derived ownerId (never the request body -- there is no
 // ownerId field in the body at all, identical to handleDraw's own contract).
@@ -916,6 +972,21 @@ app.post("/api/rooms/:code/ops/cursor", (req, res) => {
     return;
   }
   handleFreehandCursor(req, res, code);
+});
+
+// Room-scoped freehand stroke-preview updates -- gated exactly like the routes above.
+app.post("/api/rooms/:code/ops/stroke", (req, res) => {
+  const code = normalizeRoomCode(req.params.code);
+  const room = getActiveRoom(code);
+  if (!room) {
+    res.status(404).json({ error: "no such room" });
+    return;
+  }
+  if (isPixelRoom(room)) {
+    res.status(400).json({ error: "this room is a pixel-art studio" });
+    return;
+  }
+  handleFreehandStrokePreview(req, res, code);
 });
 
 // --- Pixel-art Private studios ----------------------------------------------

@@ -245,3 +245,99 @@ describe("ephemeral freehand cursors", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("ephemeral in-progress stroke previews", () => {
+  const PREVIEW = { active: true, kind: "draw", color: "#ff8800", size: 0.03, points: [{ x: 0.1, y: 0.1 }, { x: 0.2, y: 0.2 }] };
+
+  it("broadcasts incremental preview updates before any op is ever posted -- a stroke can be streamed in full before pointerup", async () => {
+    const code = await createFreehandRoom();
+    const stream = await connect(`/api/rooms/${code}/ops/stream`);
+    await stream.next(); // sync
+
+    const first = await postJson(`/api/rooms/${code}/ops/stroke`, PREVIEW);
+    expect(first.status).toBe(200);
+    const firstEvent = await stream.next();
+    expect(firstEvent.event).toBe("stroke");
+    expect(firstEvent.data).toMatchObject({ kind: "draw", color: "#ff8800", size: 0.03 });
+    expect(firstEvent.data.points).toHaveLength(2);
+
+    // A second, later update with more points -- the growing-stroke case.
+    const grown = { ...PREVIEW, points: [...PREVIEW.points, { x: 0.3, y: 0.3 }] };
+    await postJson(`/api/rooms/${code}/ops/stroke`, grown, first.cookie);
+    const secondEvent = await stream.next();
+    expect(secondEvent.event).toBe("stroke");
+    expect(secondEvent.data.points).toHaveLength(3);
+
+    // Still nothing persisted -- this is purely ephemeral broadcast traffic.
+    const ops = await fetch(new URL(`/api/rooms/${code}/ops`, baseUrl)).then((r) => r.json());
+    expect(ops).toHaveLength(0);
+  });
+
+  it("an erase preview reports kind 'erase' with color normalized to null", async () => {
+    const code = await createFreehandRoom();
+    const stream = await connect(`/api/rooms/${code}/ops/stream`);
+    await stream.next();
+
+    await postJson(`/api/rooms/${code}/ops/stroke`, { active: true, kind: "erase", size: 0.05, points: [{ x: 0.4, y: 0.4 }] });
+    const ev = await stream.next();
+    expect(ev.event).toBe("stroke");
+    expect(ev.data.kind).toBe("erase");
+    expect(ev.data.color).toBeNull();
+  });
+
+  it("active:false broadcasts stroke-end -- the final-reconciliation/cancellation signal, needing no other fields", async () => {
+    const code = await createFreehandRoom();
+    const stream = await connect(`/api/rooms/${code}/ops/stream`);
+    await stream.next();
+
+    const res = await postJson(`/api/rooms/${code}/ops/stroke`, { active: false });
+    expect(res.status).toBe(200);
+    const ev = await stream.next();
+    expect(ev.event).toBe("stroke-end");
+    expect(typeof ev.data.ownerId).toBe("string");
+  });
+
+  it("a preview is never mistaken for the real thing: the authoritative 'op' still follows normally after one", async () => {
+    const code = await createFreehandRoom();
+    const stream = await connect(`/api/rooms/${code}/ops/stream`);
+    await stream.next();
+
+    const preview = await postJson(`/api/rooms/${code}/ops/stroke`, PREVIEW);
+    await stream.next(); // stroke
+    const draw = await postJson(`/api/rooms/${code}/ops/draw`, FREEHAND_DRAW, preview.cookie);
+    expect(draw.status).toBe(201);
+    const opEvent = await stream.next();
+    expect(opEvent.event).toBe("op");
+    expect(opEvent.data).toMatchObject({ id: draw.body.id, kind: "draw", active: true });
+  });
+
+  it("rejects a malformed preview (missing points, bad kind, non-positive size, or a draw with no color)", async () => {
+    const code = await createFreehandRoom();
+    for (const body of [
+      { active: true, kind: "draw", color: "#000", size: 0.02, points: [] },
+      { active: true, kind: "sparkle", color: "#000", size: 0.02, points: [{ x: 0, y: 0 }] },
+      { active: true, kind: "draw", color: "#000", size: -1, points: [{ x: 0, y: 0 }] },
+      { active: true, kind: "draw", size: 0.02, points: [{ x: 0, y: 0 }] },
+    ]) {
+      const res = await postJson(`/api/rooms/${code}/ops/stroke`, body);
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it("two Private freehand rooms' stroke previews are isolated from each other", async () => {
+    const codeA = await createFreehandRoom();
+    const codeB = await createFreehandRoom();
+    const streamB = await connect(`/api/rooms/${codeB}/ops/stream`);
+    await streamB.next();
+
+    await postJson(`/api/rooms/${codeA}/ops/stroke`, PREVIEW);
+    await expect(streamB.next(300)).rejects.toThrow();
+  });
+
+  it("a pixel-art room rejects the freehand stroke route (400)", async () => {
+    const created = await postJson("/api/rooms", { resolution: 32 });
+    const code = created.body.code as string;
+    const res = await postJson(`/api/rooms/${code}/ops/stroke`, { active: false });
+    expect(res.status).toBe(400);
+  });
+});

@@ -4,17 +4,20 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Shared canvas</title>
-    <!-- Applies the saved/preferred theme before first paint, so there is no
-         flash of the wrong theme while app.js (a module script, which runs
-         after parsing) loads. This is the only place theme is read outside
-         app.js; the toggle button's click handling, persistence, and label
-         all still live there -- this is purely a pre-paint sync read. -->
+    <!-- Applies the system's own current preference before first paint, so
+         there is no flash of the wrong theme while the module script (which
+         runs after parsing) loads. Deliberately never reads a saved choice:
+         every page load re-initializes from prefers-color-scheme, every
+         time -- a previous manual toggle (public/app.js's or
+         public/pixel-editor.js's own, neither of which persists one any
+         more) must never override the system default on the next load. The
+         toggle button's click handling and label still live in whichever of
+         those two actually ends up running for this page -- this is purely
+         a pre-paint sync read. -->
     <script>
       (function () {
-        var saved = localStorage.getItem("theme");
         var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-        var theme = saved === "dark" || saved === "light" ? saved : prefersDark ? "dark" : "light";
-        document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.theme = prefersDark ? "dark" : "light";
       })();
     </script>
     <link rel="stylesheet" href="/styles.css" />
@@ -88,11 +91,6 @@
                 <input id="join-room-code" type="text" maxlength="6" placeholder="Room code" aria-label="Room code" />
                 <button type="submit" class="app-button">Join</button>
               </form>
-              <!-- Plain link, no JS needed: shown/hidden by the exact same
-                   #public-room-controls[hidden] rule every other Public-only
-                   control already relies on. Points at the historical C8
-                   Public freehand artwork, preserved read-only. -->
-              <a href="/archive.html" class="app-button">Archive</a>
             </div>
             <div id="private-room-controls" class="session-group" hidden>
               <!-- public/app.js (legacy rooms, untouched) shows the room
@@ -258,6 +256,15 @@
 
         <div id="canvas-viewport">
           <canvas id="canvas"></canvas>
+          <!-- Freehand-only: renders OTHER participants' strokes while
+               they're still being dragged (public/app.js's
+               remoteStrokePreviews/handleRemoteStrokeEvent). Sized/positioned
+               in JS to track #canvas's own CSS box exactly, at any zoom/pan,
+               and never drawn to from #canvas's own 2D context or any owner's
+               real layer -- a separate backing store entirely, so nothing
+               painted here can ever become, or be mistaken for, persisted
+               artwork. Unused (left untouched) by public/pixel-editor.js. -->
+          <canvas id="remote-stroke-preview" aria-hidden="true"></canvas>
           <!-- Pure CSS/DOM overlay, positioned in JS by public/pixel-editor.js
                to track the canvas's own CSS box at the current zoom -- never
                drawn into #canvas's own 2D context, so it can never
