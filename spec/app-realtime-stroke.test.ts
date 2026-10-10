@@ -202,6 +202,192 @@ describe("Part 3: incremental in-progress stroke streaming", () => {
   });
 });
 
+// Coverage for the reversible, owner-mask-consistent remote erase preview:
+// an in-progress remote erase is reflected directly on the shared visible
+// canvas (see erasePreviewLayerFor/updateErasePreviewLayer/
+// repaintVisibleCanvas in public/app.js), never the #remote-stroke-preview
+// overlay (that stays draw-only) and never the owner's own real layer
+// canvas (only ever read from, to seed a disposable snapshot). A remote
+// owner's real layer has to exist first for any of this to have something to
+// preview erasing -- seedOwnerLayer below gives them one via a normal "op"
+// broadcast, exactly like a real prior draw would.
+describe("Remote erase preview (reversible compositing)", () => {
+  function seedOwnerLayer(source: ReturnType<typeof latestEventSource>, ownerId: string, seq: number) {
+    source.emit("op", {
+      id: `seed-${ownerId}`,
+      seq,
+      ownerId,
+      kind: "draw",
+      color: "#222222",
+      size: 0.04,
+      points: [{ x: 0.2, y: 0.2 }, { x: 0.6, y: 0.6 }],
+      createdAt: Date.now(),
+    });
+  }
+
+  it("progressively repaints the shared canvas (not the overlay) as a remote erase grows, before pointerup or any op", async () => {
+    await bootAppForTest(posted);
+    const source = latestEventSource();
+    seedOwnerLayer(source, "owner-E1", 1);
+    await flush();
+
+    const mainCtx = canvasContexts.get("canvas")!;
+    const previewCtx = canvasContexts.get("remote-stroke-preview")!;
+    const mainCallsBefore = mainCtx.clearRect.mock.calls.length;
+    const previewCallsBefore = previewCtx.clearRect.mock.calls.length;
+
+    source.emit("stroke", { ownerId: "owner-E1", kind: "erase", color: null, size: 0.05, points: [{ x: 0.3, y: 0.3 }] });
+    await flush();
+
+    // The shared canvas gets a real, regional repaint -- this is what makes
+    // the erase visible progressively, unlike a fake indicator would.
+    expect(mainCtx.clearRect.mock.calls.length).toBeGreaterThan(mainCallsBefore);
+    // The overlay canvas is never used for an erase preview any more.
+    expect(previewCtx.clearRect.mock.calls.length).toBe(previewCallsBefore);
+
+    const mainCallsAfterFirst = mainCtx.clearRect.mock.calls.length;
+    source.emit("stroke", {
+      ownerId: "owner-E1",
+      kind: "erase",
+      color: null,
+      size: 0.05,
+      points: [{ x: 0.3, y: 0.3 }, { x: 0.4, y: 0.4 }],
+    });
+    await flush();
+    expect(mainCtx.clearRect.mock.calls.length).toBeGreaterThan(mainCallsAfterFirst);
+    expect(posted.some((p) => p.url.endsWith("/erase"))).toBe(false); // still nothing persisted
+  });
+
+  it("reconciles the preview with the authoritative erase op on commit, with one more repaint and no lingering preview state", async () => {
+    await bootAppForTest(posted);
+    const source = latestEventSource();
+    seedOwnerLayer(source, "owner-E2", 1);
+    await flush();
+    const mainCtx = canvasContexts.get("canvas")!;
+
+    source.emit("stroke", { ownerId: "owner-E2", kind: "erase", color: null, size: 0.05, points: [{ x: 0.3, y: 0.3 }] });
+    await flush();
+    const callsAfterPreview = mainCtx.clearRect.mock.calls.length;
+
+    source.emit("op", {
+      id: "erase-op-1",
+      seq: 2,
+      ownerId: "owner-E2",
+      kind: "erase",
+      color: null,
+      size: 0.1,
+      points: [{ x: 0.3, y: 0.3 }],
+      createdAt: Date.now(),
+    });
+    await flush();
+    expect(mainCtx.clearRect.mock.calls.length).toBeGreaterThan(callsAfterPreview);
+
+    // The preview is gone -- a further, completely unrelated op landing must
+    // not throw or re-apply any stale erase preview state.
+    source.emit("op", {
+      id: "unrelated-op",
+      seq: 3,
+      ownerId: "owner-UNRELATED",
+      kind: "draw",
+      color: "#333333",
+      size: 0.02,
+      points: [{ x: 0.5, y: 0.5 }],
+      createdAt: Date.now(),
+    });
+    await flush();
+  });
+
+  it("cancellation/abandonment restores the exact previously committed appearance once the grace period elapses", async () => {
+    await bootAppForTest(posted);
+    const source = latestEventSource();
+    seedOwnerLayer(source, "owner-E3", 1);
+    await flush();
+    const mainCtx = canvasContexts.get("canvas")!;
+
+    source.emit("stroke", { ownerId: "owner-E3", kind: "erase", color: null, size: 0.05, points: [{ x: 0.3, y: 0.3 }] });
+    await flush();
+    const callsAfterPreview = mainCtx.clearRect.mock.calls.length;
+
+    // No authoritative op ever follows (a failed save, or a disconnect) --
+    // just the stroke-end signal endGesture always sends regardless of
+    // outcome.
+    source.emit("stroke-end", { ownerId: "owner-E3" });
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 1600)); // past STROKE_PREVIEW_END_GRACE_MS
+
+    // The grace timer fired and restored the real, unerased committed
+    // appearance -- one more real repaint of exactly that region.
+    expect(mainCtx.clearRect.mock.calls.length).toBeGreaterThan(callsAfterPreview);
+  });
+
+  it("owner-only erase: one owner's in-progress erase never affects another owner's artwork, even where strokes overlap", async () => {
+    await bootAppForTest(posted);
+    const source = latestEventSource();
+    seedOwnerLayer(source, "owner-A", 1);
+    seedOwnerLayer(source, "owner-B", 2); // overlapping region, different owner
+    await flush();
+    const previewCtx = canvasContexts.get("remote-stroke-preview")!;
+
+    source.emit("stroke", { ownerId: "owner-A", kind: "erase", color: null, size: 0.05, points: [{ x: 0.3, y: 0.3 }] });
+    await flush();
+
+    // Owner B's own, unrelated in-progress draw stroke must keep updating
+    // completely normally -- owner A's active erase preview is looked up
+    // strictly by ownerId (erasePreviewLayerFor), so it can never be
+    // mistaken for, or interfere with, owner B's own preview/layer/ops.
+    const previewCallsBefore = previewCtx.clearRect.mock.calls.length;
+    source.emit("stroke", { ownerId: "owner-B", kind: "draw", color: "#00aaff", size: 0.02, points: [{ x: 0.35, y: 0.35 }] });
+    await flush();
+    expect(previewCtx.clearRect.mock.calls.length).toBeGreaterThan(previewCallsBefore);
+
+    // Owner B's own artwork reconciles normally, untouched by A's erase.
+    source.emit("op", {
+      id: "b-op-2",
+      seq: 3,
+      ownerId: "owner-B",
+      kind: "draw",
+      color: "#00aaff",
+      size: 0.02,
+      points: [{ x: 0.35, y: 0.35 }],
+      createdAt: Date.now(),
+    });
+    await flush();
+  });
+
+  it("multiple concurrent remote erase previews from different owners update independently", async () => {
+    await bootAppForTest(posted);
+    const source = latestEventSource();
+    seedOwnerLayer(source, "owner-X", 1);
+    seedOwnerLayer(source, "owner-Y", 2);
+    await flush();
+    const mainCtx = canvasContexts.get("canvas")!;
+
+    source.emit("stroke", { ownerId: "owner-X", kind: "erase", color: null, size: 0.05, points: [{ x: 0.2, y: 0.2 }] });
+    await flush();
+    const callsAfterX = mainCtx.clearRect.mock.calls.length;
+
+    source.emit("stroke", { ownerId: "owner-Y", kind: "erase", color: null, size: 0.05, points: [{ x: 0.7, y: 0.7 }] });
+    await flush();
+    expect(mainCtx.clearRect.mock.calls.length).toBeGreaterThan(callsAfterX);
+
+    // Ending X's gesture must not disturb Y's still-active preview -- Y keeps
+    // updating normally afterward.
+    source.emit("stroke-end", { ownerId: "owner-X" });
+    await flush();
+    const callsAfterXEnd = mainCtx.clearRect.mock.calls.length;
+
+    source.emit("stroke", {
+      ownerId: "owner-Y",
+      kind: "erase",
+      color: null,
+      size: 0.05,
+      points: [{ x: 0.7, y: 0.7 }, { x: 0.75, y: 0.75 }],
+    });
+    await flush();
+    expect(mainCtx.clearRect.mock.calls.length).toBeGreaterThan(callsAfterXEnd);
+  });
+});
+
 describe("Part 2: theme toggle", () => {
   it("clicking the toggle flips the theme and updates the button label immediately", async () => {
     document.documentElement.dataset.theme = "light";

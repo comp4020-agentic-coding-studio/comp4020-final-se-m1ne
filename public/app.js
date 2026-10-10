@@ -125,6 +125,34 @@ let scratch = null; // { canvas, ctx }, reused per draw-op during a repaint
 let allOps = []; // op[], the full history in server seq order -- the only thing that controls stacking order
 let opsByOwner = new Map(); // ownerId -> op[] in seq order, used only to rebuild each owner's own layer
 
+// Ephemeral, in-progress remote strokes -- never persisted, never touching
+// allOps/opsByOwner/any real layer's own canvas. Declared here (ahead of
+// repaintVisibleCanvas below, which reads it) rather than down in the
+// "Remote in-progress stroke previews" section with the rest of this
+// feature's logic, specifically so a remote in-progress ERASE can be
+// reflected on the shared visible canvas itself -- see
+// erasePreviewLayerFor/repaintVisibleCanvas and updateErasePreviewLayer
+// further down for how. ownerId -> { kind, color, size, points, lastSeen,
+// endTimer, snapshotCanvas, previewLayerCanvas } (the last two populated only
+// for an in-progress erase; see updateErasePreviewLayer).
+const remoteStrokePreviews = new Map();
+const STROKE_PREVIEW_STALE_MS = 4000; // safety net for a disconnect mid-stroke that never sends stroke-end
+const STROKE_PREVIEW_END_GRACE_MS = 1500; // grace window for the real "op" to arrive and supersede this first
+
+// Returns a temporary, fully-recomputed "what this owner's layer would look
+// like if their current in-progress remote erase gesture had already fully
+// landed" canvas, or null if this owner has no active erase preview right
+// now. Never mutates layers.get(ownerId)'s own canvas (the owner's real,
+// authoritative mask) -- only ever reads it, once, to seed a disposable copy
+// (see updateErasePreviewLayer) -- so persisted state can never be corrupted
+// by however many times this is consulted, or by a preview that's later
+// abandoned/cancelled/superseded.
+function erasePreviewLayerFor(ownerId) {
+  const preview = remoteStrokePreviews.get(ownerId);
+  if (!preview || preview.kind !== "erase") return null;
+  return preview.previewLayerCanvas ?? null;
+}
+
 let myOwnerId = null;
 // The #rrggbb string every draw op persists (read in beginGesture/
 // persistGesture), kept in sync with the shared colour-picker UI's own
@@ -398,7 +426,17 @@ function repaintVisibleCanvas(region) {
     renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points);
     scratchCtx.globalAlpha = 1;
     scratchCtx.globalCompositeOperation = "destination-in";
-    scratchCtx.drawImage(ownerLayer.canvas, rx, ry, rw, rh, rx, ry, rw, rh);
+    // If this op's owner has a remote erase gesture in progress right now,
+    // clip against the temporary, disposable preview of their post-erase
+    // layer instead of their real one -- the only reason a progressive
+    // remote erase is visible at all before the gesture's own authoritative
+    // op lands. Every other owner's ops are completely unaffected: this is
+    // looked up per-op, keyed strictly by that op's own ownerId, so one
+    // owner's in-progress erase can never clip (or fail to clip) another
+    // owner's artwork, overlapping or not -- same as the real, persisted
+    // erase model this is standing in for.
+    const clipSource = erasePreviewLayerFor(op.ownerId) ?? ownerLayer.canvas;
+    scratchCtx.drawImage(clipSource, rx, ry, rw, rh, rx, ry, rw, rh);
     scratchCtx.globalCompositeOperation = "source-over";
     ctx.drawImage(scratchCanvas, rx, ry, rw, rh, rx, ry, rw, rh);
   }
@@ -428,6 +466,13 @@ async function loadOps() {
     opsByOwner.get(op.ownerId).push(op);
   }
   rebuildAllLayers();
+  // A full reload (an undo/redo landing, local or remote) rebuilds every
+  // owner's real layer from scratch -- any snapshot an active remote erase
+  // preview was built from is stale the instant that happens, so drop it
+  // rather than let it keep clipping against a now-outdated "before" state.
+  // The owner's next "stroke" broadcast (if that gesture is in fact still
+  // going) takes a fresh snapshot from the just-rebuilt real layer.
+  clearAllRemoteStrokePreviews();
 }
 
 // myNickname is null until this owner has ever completed the one-time setup
@@ -822,36 +867,67 @@ setInterval(() => {
 }, 3000);
 
 // --- Remote in-progress stroke previews -------------------------------------
-// Renders OTHER participants' strokes while they're still being dragged, onto
-// the dedicated #remote-stroke-preview overlay canvas -- never #canvas's own
-// 2D context, allOps, opsByOwner, or any owner's real layer canvas. By
-// construction there is no code path through which a preview could become, or
-// be mistaken for, persisted artwork: the only things that ever add a real op
-// to allOps are the "op" SSE handler and persistGesture below, both
-// completely untouched by any of this. See handleFreehandStrokePreview in
-// server/index.js for the matching ephemeral broadcast side (same
-// never-persisted pattern as cursors, above).
-const remoteStrokePreviews = new Map(); // ownerId -> { kind, color, size, points, lastSeen, endTimer }
-const STROKE_PREVIEW_STALE_MS = 4000; // safety net for a disconnect mid-stroke that never sends stroke-end
-const STROKE_PREVIEW_END_GRACE_MS = 1500; // grace window for the real "op" to arrive and supersede this first
+// Renders OTHER participants' strokes while they're still being dragged. A
+// draw preview paints onto the dedicated #remote-stroke-preview overlay
+// canvas, exactly like before -- never #canvas's own 2D context, allOps,
+// opsByOwner, or any owner's real layer. An erase preview is different: an
+// overlay canvas starts (and stays) transparent, so there is nothing for a
+// destination-out stroke to reveal there the way there would be on the
+// owner's real layer -- so instead it's reflected directly on the shared
+// visible canvas itself, via a temporary, disposable copy of that owner's
+// layer (see erasePreviewLayerFor/updateErasePreviewLayer below and
+// repaintVisibleCanvas's own use of erasePreviewLayerFor), which
+// repaintVisibleCanvas clips that owner's draw ops against instead of their
+// real layer for as long as this preview is active. Either way, there is no
+// code path through which a preview could become, or be mistaken for,
+// persisted artwork: the only things that ever add a real op to allOps are
+// the "op" SSE handler and persistGesture below, and the only thing that ever
+// writes to layers.get(ownerId)'s own canvas is rebuildLayerFromOps/
+// renderCurrentDelta (this owner's own local gesture) -- none of them touched
+// by any of this. See handleFreehandStrokePreview in server/index.js for the
+// matching ephemeral broadcast side (same never-persisted pattern as cursors,
+// above).
 
 function repaintRemoteStrokePreviews() {
   remoteStrokePreviewCtx.clearRect(0, 0, remoteStrokePreviewCanvas.width, remoteStrokePreviewCanvas.height);
   for (const preview of remoteStrokePreviews.values()) {
-    if (preview.kind === "erase") {
-      // This overlay starts (and stays) fully transparent, so there is
-      // nothing underneath an in-progress erase for destination-out to
-      // reveal here the way it would on a real layer -- shown instead as a
-      // visible, clearly-temporary "working here" indicator, never an actual
-      // erase, so it can never touch anyone's real content.
-      remoteStrokePreviewCtx.save();
-      remoteStrokePreviewCtx.globalAlpha = 0.35;
-      renderPathOnLayer(remoteStrokePreviewCtx, "draw", "#9e9e9e", preview.size, preview.points);
-      remoteStrokePreviewCtx.restore();
-    } else {
-      renderPathOnLayer(remoteStrokePreviewCtx, "draw", preview.color, preview.size, preview.points);
-    }
+    if (preview.kind === "erase") continue; // rendered directly into the visible canvas instead -- see erasePreviewLayerFor
+    renderPathOnLayer(remoteStrokePreviewCtx, "draw", preview.color, preview.size, preview.points);
   }
+}
+
+// (Re)computes preview.previewLayerCanvas -- a full, disposable copy of this
+// owner's real layer with every point accumulated so far in this gesture
+// erased out of it -- always recomputed from scratch from preview.
+// snapshotCanvas (a plain pixel copy of the owner's real layer, taken once,
+// the moment this preview first appears, and never touched again), never
+// incrementally. A dropped or reordered "stroke" frame therefore can't
+// compound an error: whichever one arrives next is still a complete,
+// self-sufficient recomputation of "the whole gesture so far", exactly like
+// the preview's own points already are (see handleFreehandStrokePreview,
+// server/index.js). Nothing here ever reads from or writes to
+// layers.get(ownerId)'s own canvas except the one, one-time, read-only
+// drawImage that seeds the snapshot -- the owner's real, authoritative mask
+// is otherwise completely untouched by any of this, however many times it
+// recomputes or however this gesture ends.
+function updateErasePreviewLayer(ownerId, preview) {
+  const realLayer = layers.get(ownerId);
+  if (!realLayer) return; // nothing persisted for this owner yet to preview erasing from
+  if (!preview.snapshotCanvas) {
+    preview.snapshotCanvas = document.createElement("canvas");
+    preview.snapshotCanvas.width = canvas.width;
+    preview.snapshotCanvas.height = canvas.height;
+    preview.snapshotCanvas.getContext("2d").drawImage(realLayer.canvas, 0, 0);
+  }
+  if (!preview.previewLayerCanvas) {
+    preview.previewLayerCanvas = document.createElement("canvas");
+    preview.previewLayerCanvas.width = canvas.width;
+    preview.previewLayerCanvas.height = canvas.height;
+  }
+  const previewCtx = preview.previewLayerCanvas.getContext("2d");
+  previewCtx.clearRect(0, 0, preview.previewLayerCanvas.width, preview.previewLayerCanvas.height);
+  previewCtx.drawImage(preview.snapshotCanvas, 0, 0);
+  renderPathOnLayer(previewCtx, "erase", null, preview.size, preview.points);
 }
 
 function clearRemoteStrokePreview(ownerId) {
@@ -859,7 +935,20 @@ function clearRemoteStrokePreview(ownerId) {
   if (!preview) return;
   if (preview.endTimer !== null) clearTimeout(preview.endTimer);
   remoteStrokePreviews.delete(ownerId);
-  repaintRemoteStrokePreviews();
+  if (preview.kind === "erase" && preview.points) {
+    // Restores this owner's real, committed layer over exactly the region
+    // this preview's erase might have affected. On the "the real op landed"
+    // path this is redundant with (but harmless before) the fuller repaint
+    // that follows it there; on every OTHER path this preview can end --
+    // persistGesture failed, the drawing client disconnected outright, or
+    // this preview simply went stale -- nothing else is guaranteed to ever
+    // repaint this region again, so without this an abandoned erase would
+    // stay visibly (but never actually) erased forever: an exact restore to
+    // the last real committed appearance, not just "stop changing further".
+    repaintVisibleCanvas(deltaRegionPixels(preview.points, preview.size));
+  } else {
+    repaintRemoteStrokePreviews();
+  }
 }
 
 function clearAllRemoteStrokePreviews() {
@@ -870,7 +959,7 @@ function handleRemoteStrokeEvent(data) {
   if (data.ownerId === myOwnerId) return; // never preview an echo of my own in-progress gesture
   let preview = remoteStrokePreviews.get(data.ownerId);
   if (!preview) {
-    preview = { endTimer: null };
+    preview = { endTimer: null, snapshotCanvas: null, previewLayerCanvas: null };
     remoteStrokePreviews.set(data.ownerId, preview);
   } else if (preview.endTimer !== null) {
     // Fresh progress for this owner supersedes any earlier stroke-end grace
@@ -884,7 +973,17 @@ function handleRemoteStrokeEvent(data) {
   preview.size = data.size;
   preview.points = data.points;
   preview.lastSeen = Date.now();
-  repaintRemoteStrokePreviews();
+  if (data.kind === "erase") {
+    updateErasePreviewLayer(data.ownerId, preview);
+    // Regional, not a full repaint -- the same reasoning as the local live
+    // erase preview's own repaintVisibleCanvas(deltaRegionPixels(...)) call
+    // in renderCurrentDelta: an erase can only shrink pixels already inside
+    // its own bounding box, so nothing outside it could possibly have
+    // changed.
+    repaintVisibleCanvas(deltaRegionPixels(preview.points, preview.size));
+  } else {
+    repaintRemoteStrokePreviews();
+  }
 }
 
 // The drawing client sends stroke-end the instant its own gesture ends,
