@@ -636,6 +636,48 @@ export function presenceCount(roomId) {
   return db.prepare("SELECT COUNT(*) AS n FROM presence WHERE room_id = ?").get(roomId).n;
 }
 
+// --- Public Canvas presence (the landing page's "Online Now" counter) ------
+// Public has no `rooms` row at all (it never expires, unlike a Private Room),
+// so it can't reuse recordHeartbeat/leavePresence/reconcileRoom above -- all
+// three are gated on an actual room row existing. But the `presence` table
+// itself has no FK to `rooms` (see its own CREATE TABLE comment) and its
+// PRIMARY KEY is (room_id, presence_id), so a fixed, never-a-real-room-code
+// sentinel scopes Public's own presence rows with exactly the same isolation
+// a real room_id gets, reusing the identical table/columns/staleness
+// definition -- no second presence mechanism, just a second scope value.
+// (Room codes are always 6 uppercase letters/digits -- see
+// ROOM_CODE_ALPHABET/ROOM_CODE_LENGTH above -- so this can never collide with
+// one; the same "__public__" convention is already used for the unrelated
+// SSE subscriber scoping in server/index.js's opScopeKey.)
+const PUBLIC_PRESENCE_SCOPE = "__public__";
+const countLivePresenceStmt = db.prepare("SELECT COUNT(*) AS n FROM presence WHERE room_id = ? AND last_seen >= ?");
+
+// Renews one landing-page tab's lease and, in the same call, prunes this
+// scope's own stale rows (the "stale-session cleanup" this feature needs) --
+// there is no background sweep timer for Public, the same lazy,
+// triggered-by-activity cleanup style reconcileRoom already uses for rooms,
+// just without any room-expiry bookkeeping to go with it.
+export function recordPublicHeartbeat(presenceId, ownerId, now = Date.now()) {
+  upsertPresenceStmt.run(PUBLIC_PRESENCE_SCOPE, presenceId, ownerId, now);
+  deleteStalePresenceStmt.run(PUBLIC_PRESENCE_SCOPE, now - STALE_TIMEOUT_MS);
+}
+
+// Proactively removes exactly one tab's lease (a landing page being closed,
+// or Enter Canvas navigating away) -- best-effort, the same role
+// leavePresence plays for rooms; the lease simply going stale is still the
+// correctness fallback for a closed tab, a crash, or a lost network.
+export function leavePublicPresence(presenceId) {
+  deleteOnePresenceStmt.run(PUBLIC_PRESENCE_SCOPE, presenceId);
+}
+
+// The one definition of "Online Now": live (non-stale) presence rows under
+// the Public scope, counted by presence_id (one lease per tab/page-load,
+// exactly like every other presence row) -- never a count of `guests` table
+// rows, which is total-ever-seen history, not who is here right now.
+export function countLivePublicPresence(now = Date.now()) {
+  return countLivePresenceStmt.get(PUBLIC_PRESENCE_SCOPE, now - STALE_TIMEOUT_MS).n;
+}
+
 // --- Guest nickname (cosmetic display metadata, never an authority) --------
 //
 // Keyed by owner_id, the same server-derived anon_id every draw/erase op and

@@ -52,6 +52,29 @@
           </button>
         </div>
         <div id="action-row-right" class="action-group">
+          <!-- Voluntary way back to the landing page (public/landing.html) --
+               a plain link, no JS needed: shown and wired identically
+               whichever of public/app.js/public/pixel-editor.js ends up
+               running, since neither file needs to touch it at all. Never
+               shown on the landing page itself (this file is the editor
+               shell; the landing page never loads it). -->
+          <a href="/" id="home-link" class="app-button" title="Back to the landing page">Home</a>
+          <!-- Shown for both Public and Private, legacy and pixel-editor
+               alike (public/help-popover.js is wired from both public/app.js
+               and public/pixel-editor.js) -- the same welcome/about copy the
+               landing page's onboarding modal shows a new visitor once, kept
+               reachable afterward without a second place to edit it (see
+               public/about-content.js). -->
+          <button
+            id="help-button"
+            type="button"
+            class="app-button"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            aria-controls="help-popover"
+          >
+            Help
+          </button>
           <!-- Freehand-only (public/app.js reveals and wires this; never
                touched by public/pixel-editor.js, so it stays hidden for an
                existing pixel-art room, matching "no pixel drawing changes"). -->
@@ -113,7 +136,7 @@
                 </select>
               </label>
               <input type="color" id="room-background-colour-input" value="#ffffff" hidden />
-              <a href="/" id="back-to-public" class="app-button">Back to Public Canvas</a>
+              <a href="/canvas" id="back-to-public" class="app-button">Back to Public Canvas</a>
             </div>
             <!-- Opens #document-settings-popover (dimensions + Grid toggle,
                  plus -- for a pixel-art room -- room code/background) --
@@ -464,6 +487,19 @@
           <button type="button" id="profile-save-button" class="app-button">Save</button>
         </div>
       </div>
+    </div>
+
+    <!-- Shown for every mode/scope alike (public/help-popover.js), reusing
+         the exact same welcome/about copy public/landing.html's onboarding
+         modal shows a new visitor once (public/about-content.js) -- the
+         body below is filled in by renderAboutContent(), not hardcoded here,
+         so the two can never drift apart. -->
+    <div id="help-popover" role="dialog" aria-label="About this site" hidden>
+      <div id="help-popover-header">
+        <span>About</span>
+        <button type="button" id="help-popover-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="help-popover-body"></div>
     </div>
 
     <!-- Freehand-only, one-time: shown by public/app.js on first visit (no

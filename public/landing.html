@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Shared Canvas</title>
+    <!-- Same pre-paint theme-init technique as public/index.html -- applies
+         the system's own current preference before first paint, so there is
+         no flash of the wrong theme. Deliberately never reads a saved
+         choice, same reasoning as the editor's own copy (see that file's
+         comment): this page has no manual toggle of its own at all, system
+         preference is the only input. -->
+    <script>
+      (function () {
+        var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.dataset.theme = prefersDark ? "dark" : "light";
+      })();
+    </script>
+    <link rel="stylesheet" href="/landing.css" />
+  </head>
+  <body>
+    <!-- The actual live Public Canvas, read-only: public/landing-canvas.js
+         renders it from the exact same "sync"/"op"/"undo"/"redo" SSE events
+         public/app.js's own editor consumes (server/index.js's
+         startFreehandStream, completely unchanged for this page's sake).
+         pointer-events: none plus simply never wiring any pointer/keyboard
+         handler to it (see public/landing.js) is what makes this page
+         non-interactive -- there is no drawing/erasing/panning code path
+         here at all, not just a disabled one. -->
+    <canvas id="landing-canvas" aria-hidden="true"></canvas>
+    <!-- A soft, even scrim over the canvas so the hero text/button stay
+         comfortably readable over any artwork colour, without covering the
+         canvas with an opaque panel. -->
+    <div id="landing-scrim" aria-hidden="true"></div>
+
+    <main id="landing-hero">
+      <h1 id="landing-title">Shared Canvas</h1>
+      <p id="landing-subtitle">A cozy place to draw together, one stroke at a time.</p>
+      <button type="button" id="enter-canvas-button">Enter Canvas</button>
+    </main>
+
+    <div id="online-counter" aria-live="polite">
+      <span id="online-dot" aria-hidden="true"></span>
+      <span id="online-count">0</span>
+      <span>Online Now</span>
+    </div>
+
+    <!-- Shown once, only for a visitor with no guest profile yet (GET
+         /api/me's own nickname still null -- public/landing.js checks this
+         on "Enter Canvas", never just from loading this page). Reuses the
+         exact same two fields and POST /api/me/profile as public/index.html's
+         own one-time setup modal and Profile popover -- one guest identity,
+         one validation contract, just reached from here first for a new
+         visitor. -->
+    <div id="onboarding-overlay" hidden>
+      <div id="onboarding-dialog" role="dialog" aria-labelledby="onboarding-title">
+        <div id="onboarding-about"></div>
+        <div id="onboarding-form">
+          <label class="onboarding-field">
+            <span class="onboarding-label">Nickname</span>
+            <input
+              type="text"
+              id="onboarding-nickname-input"
+              maxlength="20"
+              placeholder="Your name"
+              aria-label="Nickname"
+            />
+          </label>
+          <label class="onboarding-field">
+            <span class="onboarding-label">Cursor colour</span>
+            <input type="color" id="onboarding-colour-input" value="#1e88e5" aria-label="Cursor colour" />
+          </label>
+          <button type="button" id="onboarding-start-button">Start Drawing</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/landing.js"></script>
+  </body>
+</html>

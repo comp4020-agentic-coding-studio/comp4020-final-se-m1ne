@@ -2,6 +2,7 @@ import { effectiveOpacity } from "./fade.js";
 import { rgbToHex } from "./colour.js";
 import { initColourPicker } from "./colour-picker-ui.js";
 import { compositeOverWhite } from "./sampling.js";
+import { wireHelpPopover } from "./help-popover.js";
 import {
   DOCUMENT_WIDTH,
   DOCUMENT_HEIGHT,
@@ -1563,7 +1564,9 @@ async function leaveRoom() {
   } catch {
     // Best-effort, see above.
   }
-  location.href = "/";
+  // "/" is the landing page now (public/landing.html) -- returning from a
+  // Private Room must enter the Public editor directly, not the landing page.
+  location.href = "/canvas";
 }
 
 // Visibility only -- which controls are shown, not which drawing engine
@@ -1655,6 +1658,12 @@ window.addEventListener("keydown", (event) => {
 initCanvasBackingStore();
 statusDocSize.textContent = `${DOCUMENT_WIDTH} × ${DOCUMENT_HEIGHT}`;
 setMode(mode);
+// Unconditional: this module is always "legacy" mode exclusively (see
+// public/pixeldoc.js's resolveEditorMode) -- it is never loaded alongside
+// public/pixel-editor.js's own copy of this same wiring (that one runs only
+// inside bootPixelEditor, the mutually exclusive "pixel" branch), so there is
+// no risk of the double-listener bug the theme toggle once had.
+wireHelpPopover();
 // One-shot: runs once the workspace has a valid measured size at initial
 // load (hence the rAF, so #canvas-viewport has completed layout), and never
 // again -- a later window resize must never re-trigger Fit (see the removed

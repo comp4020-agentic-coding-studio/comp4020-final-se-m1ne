@@ -1350,6 +1350,77 @@ body {
   justify-content: flex-end;
 }
 
+/* --- Help/About popover (every mode/scope) -------------------------------------
+   Same chrome as #profile-popover, just wider to comfortably fit prose --
+   reached through #help-button, positioned in JS by public/help-popover.js
+   exactly like #profile-popover is positioned in public/app.js. The body
+   content itself (.about-*) is rendered by public/about-content.js, shared
+   verbatim with public/landing.html's own onboarding modal. */
+#help-popover {
+  position: fixed;
+  z-index: 30;
+  width: 280px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--popover-bg);
+  border: 1px solid var(--popover-border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 6px var(--popover-shadow);
+  padding: 10px;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+
+#help-popover[hidden] {
+  display: none;
+}
+
+#help-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--divider);
+}
+
+#help-popover-close {
+  border: none;
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+#help-popover-close:hover {
+  background: var(--control-hover-bg);
+}
+
+#help-popover-body .about-title {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+
+#help-popover-body .about-intro {
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+}
+
+#help-popover-body .about-section-heading {
+  margin: 10px 0 2px;
+  font-size: 0.82rem;
+}
+
+#help-popover-body .about-section-body {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
 /* --- One-time guest setup modal (freehand only) ---------------------------------
    Same overlay+dialog chrome as #leave-room-overlay/#leave-room-dialog. */
 #guest-setup-overlay {

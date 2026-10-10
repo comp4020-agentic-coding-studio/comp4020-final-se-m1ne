@@ -96,10 +96,24 @@ it("a Public cursor broadcast uses this owner's own saved cursor colour, not the
 
   await nextFrame(); // sync
   await postJson("/api/ops/cursor", { x: 0.1, y: 0.1, showCursor: true, showNickname: true }, cookie);
-  const cursorEvent = await nextFrame();
-  expect(cursorEvent.event).toBe("cursor");
-  expect(cursorEvent.data.color).toBe("#334455");
-  expect(cursorEvent.data.nickname).toBe("Casey");
+
+  // Public's own stream is shared with every other concurrently-running spec
+  // file in this suite (other draws, cursors, and -- since the landing
+  // page's presence heartbeats also broadcast on this exact scope, see
+  // spec/landing.test.ts -- "presence" events too), so the very next frame
+  // is not guaranteed to be this cursor's own broadcast; look for the one
+  // carrying this nickname specifically, within a bounded number of frames
+  // (never an unbounded wait -- nextFrame() itself has no timeout, so a
+  // wall-clock deadline alone could still hang if the stream ever fell
+  // silent), the same tradeoff spec/freehand-realtime.test.ts's own
+  // Public-isolation test notes.
+  let cursorEvent: { event: string; data: any } | null = null;
+  for (let i = 0; i < 100 && !cursorEvent; i++) {
+    const ev = await nextFrame();
+    if (ev.event === "cursor" && ev.data.nickname === "Casey") cursorEvent = ev;
+  }
+  expect(cursorEvent).not.toBeNull();
+  expect(cursorEvent!.data.color).toBe("#334455");
 
   reader.cancel();
 });

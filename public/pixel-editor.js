@@ -29,6 +29,7 @@ import { fadeOpacity } from "./fade.js";
 import { hexToRgb, rgbToHex } from "./colour.js";
 import { initColourPicker } from "./colour-picker-ui.js";
 import { compositeOverWhite } from "./sampling.js";
+import { wireHelpPopover } from "./help-popover.js";
 import { replayPixelOps, cellsForStroke, cellKey } from "./pixelgrid.js";
 import { cursorDiameterCssPx, fitZoom, stepZoom, clampZoom } from "./viewport.js";
 import {
@@ -168,6 +169,11 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     syncThemeToggleUI();
   });
   syncThemeToggleUI();
+  // Same reasoning as the theme toggle just above: wired only inside
+  // bootPixelEditor (the "pixel" branch only), never at module top level, so
+  // it is never double-registered alongside public/app.js's own copy of this
+  // same wiring on a "legacy" page.
+  wireHelpPopover();
 
   const isPublicPixelWall = roomCode === null;
   // One uniform ceiling for every tool/mode combination -- never a
@@ -998,7 +1004,9 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     } catch {
       // Best-effort; the heartbeat simply stopping is still the correctness fallback.
     }
-    location.href = "/";
+    // "/" is the landing page now (public/landing.html) -- returning from a
+    // Private Room must enter the Public editor directly, not the landing page.
+    location.href = "/canvas";
   }
 
   // The shared Procreate/Pixquare-inspired editor shell: ONE DOM layout,

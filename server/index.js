@@ -6,13 +6,16 @@ import { fileURLToPath } from "node:url";
 import { getOrSetAnonId } from "./anon.js";
 import {
   abandonRedoBranch,
+  countLivePublicPresence,
   createRoom,
   getActiveRoom,
   getGuestProfile,
   insertOp,
   leavePresence,
+  leavePublicPresence,
   listOps,
   recordHeartbeat,
+  recordPublicHeartbeat,
   redoLatestOwnOp,
   setGuestCursorColor,
   setGuestNickname,
@@ -26,6 +29,30 @@ const PORT = process.env.PORT ?? 8080;
 
 const app = express();
 app.use(express.json());
+
+// Page routes -- registered before express.static so each wins over that
+// middleware's own default "serve index.html for a directory request"
+// behaviour at "/" (Express tries handlers in registration order; the first
+// one to send a response stops the chain, so these must come first here or
+// express.static would already have answered "/" on its own, every time,
+// before either of these ever ran).
+//
+// "/" is the new landing page (public/landing.html): a live, read-only
+// preview of Public Canvas plus "Enter Canvas" -- never the editor itself.
+// "/canvas" is the editor's own stable, distinct route for Public (the old
+// bare "/" behaviour, unchanged in every other respect -- same
+// public/index.html shell, same public/pixeldoc.js dispatch, same
+// public/app.js/public/pixel-editor.js underneath) so a refresh, a bookmark,
+// or "Back to Public Canvas" from a room always lands in the editor, never
+// back on the landing page. "/room/:code" (further below) is completely
+// unaffected -- it already served this exact file this exact way.
+app.get("/", (req, res) => {
+  res.sendFile(join(ROOT, "public", "landing.html"));
+});
+app.get("/canvas", (req, res) => {
+  res.sendFile(join(ROOT, "public", "index.html"));
+});
+
 app.use(express.static(join(ROOT, "public")));
 
 // Explicitly scoped to the freehand replay list -- this is the exact
@@ -431,7 +458,14 @@ function startPixelStream(req, res, roomId, width, height) {
 // sync payload shape: a freehand document has no stored width/height at all
 // (public/viewport.js's own fixed DOCUMENT_WIDTH/HEIGHT cover every freehand
 // document, Public and every room alike), so there is nothing document-sized
-// to include here.
+// to include here. For Public specifically (roomId === null), the payload
+// also carries the current "Online Now" count (countLivePublicPresence) --
+// the landing page's read-only renderer and the Public editor both connect
+// here, so this one synchronous snapshot is enough to show a correct count
+// immediately on connect, before this tab's own first heartbeat (or anyone
+// else's) has even landed; see the "presence" event (broadcast from the
+// heartbeat/leave routes below) for how it stays live after that. Omitted
+// for a Private Room -- this feature is Public-only, see the project brief.
 function startFreehandStream(req, res, roomId) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -442,7 +476,8 @@ function startFreehandStream(req, res, roomId) {
 
   const unsubscribe = subscribeFreehandStream(roomId, res);
   const ops = listOps(roomId, "freehand");
-  res.write(`event: sync\ndata: ${JSON.stringify({ docKind: "freehand", ops })}\n\n`);
+  const syncPayload = roomId === null ? { docKind: "freehand", ops, onlineCount: countLivePublicPresence() } : { docKind: "freehand", ops };
+  res.write(`event: sync\ndata: ${JSON.stringify(syncPayload)}\n\n`);
 
   const heartbeat = setInterval(() => {
     try {
@@ -1181,6 +1216,39 @@ app.post("/api/rooms/:code/leave", (req, res) => {
   res.status(200).json({ ok: true });
 });
 
+// --- Public Canvas presence (the landing page's "Online Now" counter) ------
+// Same lease/heartbeat shape as the room-scoped routes above (presenceId
+// supplied by the client, ownerId always server-derived), scoped to Public
+// via recordPublicHeartbeat/leavePublicPresence (server/db.js) instead of a
+// room code -- there is no room to 404 against, so these always succeed.
+// Both broadcast the freshly-recomputed live count over Public's own
+// freehand SSE stream as a "presence" event, so every connected tab (the
+// landing page and the Public editor alike) updates without polling.
+app.post("/api/presence/heartbeat", (req, res) => {
+  const { presenceId } = req.body ?? {};
+  if (typeof presenceId !== "string" || presenceId.length === 0) {
+    res.status(400).json({ error: "presence requires a presenceId" });
+    return;
+  }
+  const ownerId = getOrSetAnonId(req, res);
+  recordPublicHeartbeat(presenceId, ownerId);
+  const count = countLivePublicPresence();
+  broadcastFreehandEvent(null, "presence", { count });
+  res.status(200).json({ ok: true, count });
+});
+
+app.post("/api/presence/leave", (req, res) => {
+  const { presenceId } = req.body ?? {};
+  if (typeof presenceId !== "string" || presenceId.length === 0) {
+    res.status(400).json({ error: "leave requires a presenceId" });
+    return;
+  }
+  leavePublicPresence(presenceId);
+  const count = countLivePublicPresence();
+  broadcastFreehandEvent(null, "presence", { count });
+  res.status(200).json({ ok: true, count });
+});
+
 // Serves the exact same canvas shell express.static would have served at /,
 // but only once the room is confirmed to exist -- an unknown or expired code
 // gets a 404 instead of a working canvas, and nothing here ever creates a
@@ -1188,7 +1256,7 @@ app.post("/api/rooms/:code/leave", (req, res) => {
 app.get("/room/:code", (req, res) => {
   const code = normalizeRoomCode(req.params.code);
   if (!getActiveRoom(code)) {
-    res.status(404).type("html").send('<!doctype html>\n<meta charset="utf-8" />\n<p>No such room. <a href="/">Back to Public Canvas</a></p>');
+    res.status(404).type("html").send('<!doctype html>\n<meta charset="utf-8" />\n<p>No such room. <a href="/canvas">Back to Public Canvas</a></p>');
     return;
   }
   res.sendFile(join(ROOT, "public", "index.html"));

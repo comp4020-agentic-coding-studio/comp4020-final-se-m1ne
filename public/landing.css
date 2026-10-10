@@ -1,0 +1,312 @@
+* {
+  box-sizing: border-box;
+}
+
+/* --- Design tokens -----------------------------------------------------------
+   A separate warm palette from public/styles.css's own neutral editor chrome
+   -- deliberately so (see the final-project brief's "cozy, relaxing,
+   welcoming modern pixel-game" direction, distinct from the functional
+   drawing-tool UI). Cream/sage/apricot in light mode, a muted, consistently
+   warm dark counterpart below -- never the editor's own grays/blues. */
+:root {
+  --landing-bg: #faf3e7;
+  --landing-bg-accent: #f1e3cf;
+  --landing-scrim: rgba(250, 243, 231, 0.42);
+  --landing-text: #4a3c30;
+  --landing-text-soft: #7a6a5a;
+  --landing-card-bg: #fffaf2;
+  /* Translucent, not solid -- used by the hero and the online counter so the
+     live canvas keeps reading through behind them (the brief's own "keep the
+     canvas visible... rather than covering it with large opaque panels").
+     The onboarding modal keeps the fully opaque --landing-card-bg instead:
+     it is a focused dialog over its own separate dim backdrop, not a
+     persistent overlay sitting on top of the ambient canvas view. */
+  --landing-hero-bg: rgba(255, 250, 242, 0.78);
+  --landing-border: rgba(74, 60, 48, 0.16);
+  --landing-shadow: rgba(120, 90, 55, 0.2);
+  --landing-sage: #93a97e;
+  --landing-sage-hover: #839a6e;
+  --landing-apricot: #e8a96f;
+  --landing-on-sage: #fffaf2;
+  --landing-dot-live: #93a97e;
+  --radius-sm: 3px;
+  --radius-md: 10px;
+}
+
+:root[data-theme="dark"] {
+  --landing-bg: #211b15;
+  --landing-bg-accent: #2a2219;
+  --landing-scrim: rgba(18, 15, 11, 0.52);
+  --landing-text: #f2e7d8;
+  --landing-text-soft: #c7b8a5;
+  --landing-card-bg: #2b241c;
+  --landing-hero-bg: rgba(43, 36, 28, 0.78);
+  --landing-border: rgba(242, 231, 216, 0.16);
+  --landing-shadow: rgba(0, 0, 0, 0.5);
+  --landing-sage: #7f9a6e;
+  --landing-sage-hover: #8fae7c;
+  --landing-apricot: #d99a66;
+  --landing-on-sage: #1c1812;
+  --landing-dot-live: #9bbf85;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--landing-text);
+  background: var(--landing-bg);
+}
+
+body {
+  position: relative;
+}
+
+:focus-visible {
+  outline: 2px solid var(--landing-sage);
+  outline-offset: 2px;
+}
+
+/* --- Live read-only canvas background --------------------------------------
+   The real Public Canvas, rendered by public/landing-canvas.js. object-fit:
+   cover fills the viewport on both axes from the fixed 1920x1080 backing
+   store, cropping any overflow rather than stretching or letterboxing --
+   exactly the brief's own "fit without distortion, cropping acceptable".
+   pointer-events: none plus never wiring a pointer handler to it at all is
+   what keeps this page read-only. */
+#landing-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+}
+
+/* A soft, even wash over the canvas so the hero text and button stay
+   comfortably legible over any artwork colour underneath, without a large
+   opaque panel hiding the canvas itself. */
+#landing-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--landing-scrim);
+  pointer-events: none;
+}
+
+#landing-hero {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  max-width: min(90vw, 560px);
+  margin: 9vh auto 0;
+  padding: 28px 32px;
+  background: var(--landing-hero-bg);
+  border: 1px solid var(--landing-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 28px var(--landing-shadow);
+}
+
+#landing-title {
+  margin: 0;
+  /* Pixel-game-flavoured without an external bitmap font or heavy outlines:
+     a bold system sans, a touch of letter-spacing, and a very soft shadow
+     for a gentle "carved" feel -- restrained, never neon or harsh-outlined. */
+  font-size: clamp(1.8rem, 5vw, 2.6rem);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 0 var(--landing-border);
+  color: var(--landing-text);
+}
+
+#landing-subtitle {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--landing-text-soft);
+  line-height: 1.5;
+}
+
+#enter-canvas-button {
+  margin-top: 6px;
+  padding: 11px 28px;
+  font-size: 1rem;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--landing-on-sage);
+  background: var(--landing-sage);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.12);
+  transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.12s ease;
+}
+
+#enter-canvas-button:hover {
+  background: var(--landing-sage-hover);
+}
+
+#enter-canvas-button:active {
+  transform: translateY(2px);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.12);
+}
+
+/* --- Online Now counter -----------------------------------------------------
+   Bottom-right, small and quiet -- never covering the canvas, never a large
+   panel. The count itself always comes from the server (see landing.js's
+   setOnlineCount); nothing here is a hardcoded or client-invented number. */
+#online-counter {
+  position: fixed;
+  right: 18px;
+  bottom: 16px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-family: ui-monospace, "SFMono-Regular", "Consolas", monospace;
+  color: var(--landing-text);
+  background: var(--landing-hero-bg);
+  border: 1px solid var(--landing-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 2px 10px var(--landing-shadow);
+}
+
+#online-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--landing-dot-live);
+  flex-shrink: 0;
+}
+
+/* --- Onboarding modal -------------------------------------------------------
+   Same overlay+dialog shape as public/index.html's own one-time guest setup
+   modal, restyled to the warm palette -- compact, scannable, never a
+   multi-page tutorial: the about copy, then the two fields, then one action. */
+#onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(33, 27, 21, 0.45);
+}
+
+#onboarding-dialog {
+  width: min(92vw, 420px);
+  max-height: 86vh;
+  overflow-y: auto;
+  padding: 22px 24px;
+  background: var(--landing-card-bg);
+  border: 1px solid var(--landing-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 14px 36px var(--landing-shadow);
+}
+
+#onboarding-about .about-title {
+  margin: 0 0 6px;
+  font-size: 1.3rem;
+  font-weight: 800;
+}
+
+#onboarding-about .about-intro {
+  margin: 0 0 14px;
+  color: var(--landing-text-soft);
+  line-height: 1.5;
+}
+
+#onboarding-about .about-section-heading {
+  margin: 10px 0 2px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--landing-apricot);
+}
+
+#onboarding-about .about-section-body {
+  margin: 0;
+  color: var(--landing-text-soft);
+  line-height: 1.45;
+  font-size: 0.88rem;
+}
+
+#onboarding-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--landing-border);
+}
+
+.onboarding-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.onboarding-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--landing-text-soft);
+}
+
+#onboarding-nickname-input {
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--landing-text);
+  background: var(--landing-bg);
+  border: 1px solid var(--landing-border);
+  border-radius: var(--radius-sm);
+}
+
+#onboarding-colour-input {
+  width: 48px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--landing-border);
+  border-radius: var(--radius-sm);
+  background: var(--landing-bg);
+}
+
+#onboarding-start-button {
+  margin-top: 4px;
+  padding: 10px 18px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--landing-on-sage);
+  background: var(--landing-sage);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+#onboarding-start-button:hover {
+  background: var(--landing-sage-hover);
+}
+
+#onboarding-overlay[hidden] {
+  display: none;
+}
+
+@media (max-width: 480px) {
+  #landing-hero {
+    margin-top: 6vh;
+    padding: 22px 18px;
+  }
+
+  #online-counter {
+    right: 10px;
+    bottom: 10px;
+  }
+}
