@@ -1,31 +1,33 @@
-# Public Canvas
+# Shared Canvas
 
-Public Canvas is a collaborative drawing website built around two ways of sharing a canvas. The homepage is a public drawing space that anyone can enter and draw on immediately without an account. Visitors can also create or join a private room using a short room code. Both modes use persistent drawing operations, while the public canvas gradually fades old contributions and private rooms preserve their artwork while the room remains active.
+Shared Canvas is a real-time collaborative drawing website where people can create something together without accounts. Visitors first see the live Public Canvas, then enter with a nickname and cursor colour. They can draw on the public canvas or create a private room and invite friends using a short code.
 
 ## What good means
 
-For this project, good means **easy to enter, responsive enough to feel like a drawing application, and collaborative without giving one anonymous participant destructive control over another participant's work**.
+For this project, good means **easy to join, meaningful to use together, and respectful of each person's contributions**. The goal is not to reproduce a professional drawing application, but to make shared drawing feel welcoming, immediate and safe enough for strangers to participate.
 
-Low-friction participation shaped the public canvas. Cheng and Hill describe multiple pathways through which newcomers can participate in Scratch rather than a single route into community membership. Public Canvas applies that idea by making participation possible before identity or commitment: opening the homepage is enough to draw. Private rooms add a more intentional shared space without introducing accounts or profiles.
+Cheng and Hill's research on participation in Scratch suggests that online creative communities benefit from different ways to become involved. Shared Canvas follows this idea by keeping entry simple. Visitors can watch the public artwork before joining, start drawing without creating an account, or choose a private room for a smaller group.
 
-The second concern is how people encounter each other through the artwork. Erickson and Kellogg describe socially translucent systems in terms of visibility, awareness, and accountability. Here, previous marks make other participants visible through what they have contributed. People can draw beside, across, or in response to existing work, but the application distinguishes anonymous owners and only allows the eraser to remove the current participant's own pixels. Collaboration therefore changes the shared visual space without making deletion of somebody else's contribution a basic drawing action.
+Erickson and Kellogg's concept of social translucence connects visibility, awareness and accountability. In Shared Canvas, live strokes, coloured cursors and optional nicknames help people notice one another. Seeing a line appear while somebody draws makes collaboration feel different from simply viewing a finished picture. Participants can respond to each other's work as it happens.
 
-FlockMod provides a practical precedent for browser-based collaborative drawing with low barriers to participation and shared rooms. Public Canvas combines that general model with a common homepage canvas and temporary public history. Public drawing operations continuously fade according to their original creation time, while private-room artwork does not fade.
+However, visibility alone does not make a shared space comfortable. Each participant can erase and undo only their own contributions. This limits accidental or deliberate destruction without requiring moderators or permanent accounts.
 
-Drawing quality is also part of the definition of good. The application now uses a fixed 1920×1080 artwork document inside a separate workspace, with zoom, Fit, panning, size-aware tool cursors, colour controls, an eyedropper, and spatial erasing. The document is independent of browser size, so resizing or reopening a room does not redefine the artwork coordinate system. Undo and redo operate on each anonymous participant's own operation history.
+FlockMod demonstrates the appeal of accessible browser-based collaborative drawing. Shared Canvas takes a related approach but distinguishes two kinds of shared space. Public artwork gradually fades and disappears after 12.5 hours, giving the canvas a changing, temporary character. Private-room artwork does not fade, although a room expires after 24 hours of continuous emptiness. These different lifetimes encourage spontaneous public participation and more intentional drawing with friends.
 
 ## Enforced and judged
 
-Persistence, deterministic operation order, anonymous ownership, owner-only erasing, undo/redo history, public fading, private-room isolation and lifecycle behaviour are covered by automated checks. The drawing document and coordinate calculations are also tested independently of viewport size.
+Automated checks cover persistent operations, ownership restrictions, deterministic ordering, undo/redo, fading, room isolation, lifecycle rules and real-time event handling. Server-sent events deliver changes to other open sessions without requiring a refresh. The application also keeps drawing operations separate from temporary cursor and in-progress stroke previews.
 
-Other qualities remain matters of judgement. I manually test whether drawing follows the pointer closely, whether zoom and panning still feel accurate, whether the interface reads as a drawing workspace rather than a canvas demo, and whether the boundary between shared interaction and destructive control feels understandable.
+Other qualities require human judgement. I test with separate browser sessions to see whether strokes appear promptly, whether remote cursors are understandable, whether erasing behaves predictably, and whether newcomers can understand the difference between public and private spaces. I also check that the interface remains usable at different browser sizes.
 
-## Current boundary
+## Current boundaries
 
-Real-time synchronisation between simultaneously open browsers is not implemented yet. The current version also deliberately excludes accounts, profiles, chat, pressure sensitivity, layers, selection tools, shapes and a larger professional brush library. The next drawing-system work is a brush engine, followed by user layers; real-time synchronisation follows once that document model is stable.
+Shared Canvas provides basic freehand drawing, erasing, colour selection, zoom and navigation, guest profiles, live cursors and shared rooms. It does not aim to provide a complete professional painting toolkit. Advanced brushes, layers, selection tools, pressure sensitivity, chat and permanent accounts are outside the current version.
+
+The remaining work focuses on reliability and clarity, particularly consistent synchronization and cursor positioning when participants use different window sizes.
 
 ## References
 
 - Thomas Erickson and Wendy A. Kellogg (2000), *Social Translucence: An Approach to Designing Systems that Support Social Processes*. ACM Transactions on Computer-Human Interaction. https://smg.media.mit.edu/library/erickson2000.pdf
 - Ruijia Cheng and Benjamin Mako Hill (2022), *Many Destinations, Many Pathways: A Quantitative Analysis of Legitimate Peripheral Participation in Scratch*. Proceedings of the ACM on Human-Computer Interaction. https://arxiv.org/abs/2211.04046
-- FlockMod, collaborative drawing platform and documentation. https://flockmod.com/
+- FlockMod, collaborative drawing platform. https://flockmod.com/
