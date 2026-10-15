@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getOrSetAnonId } from "./anon.js";
+import { getOrSetAnonId, readAnonId } from "./anon.js";
 import {
   abandonRedoBranch,
   countOnlineNow,
@@ -37,9 +37,8 @@ const AUDIT_ACTION_ROUTE = /^\/api\/(?:(?:ops|pixels)\/|rooms\/([^/]+)\/(?:(?:op
 const AUDIT_JOIN_ROUTE = /^\/api\/(?:(?:ops|pixels)|rooms\/([^/]+)\/(?:ops|pixels))\/stream$/;
 
 function auditGuest(req, res) {
-  const cookieId = /(?:^|;\s*)anon_id=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
   const setCookie = String(res.getHeader("set-cookie") ?? "");
-  const id = cookieId ?? /anon_id=([^;]+)/.exec(setCookie)?.[1];
+  const id = readAnonId(req) ?? /anon_id=([^.;]+)/.exec(setCookie)?.[1];
   return id ? id.slice(0, 8) : "unknown";
 }
 
