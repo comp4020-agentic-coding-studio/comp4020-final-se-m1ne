@@ -94,6 +94,16 @@ describe("shared three-column editor layout (styles.css source)", () => {
     expect(rule(".size-control")).toMatch(/align-items:\s*center/); // label, slider and value on one line
   });
 
+  it("the preset palette is a 5-column grid of equal squares that fits the sidebar's content width", () => {
+    const grid = rule("#palette");
+    expect(grid).toMatch(/grid-template-columns:\s*repeat\(5,\s*40px\)/);
+    const gap = Number(grid.match(/gap:\s*(\d+)px/)![1]);
+    const sidebarContent = 264 - 2 * 14 - 2; // 264px column, 14px padding each side, 1px border each side
+    expect(5 * 40 + 4 * gap).toBeLessThanOrEqual(sidebarContent);
+    expect(rule(".swatch")).toMatch(/width:\s*40px/);
+    expect(rule(".swatch")).toMatch(/height:\s*40px/);
+  });
+
   it("public and private differ only in workspace/badge colours", () => {
     expect(css).toMatch(/#workspace\.is-public\s*\{[^}]*--workspace-surface:\s*#e4ead9;[^}]*--badge-bg:\s*#d2e0c6;[^}]*--badge-text:\s*#536d46;/);
     expect(css).toMatch(/#workspace\.is-private\s*\{[^}]*--workspace-surface:\s*#e9e1ee;[^}]*--badge-bg:\s*#ddd0e6;[^}]*--badge-text:\s*#725b85;/);

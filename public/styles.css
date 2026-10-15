@@ -1440,8 +1440,8 @@ body {
    handling (no separate colour state). */
 #palette {
   display: grid;
-  grid-template-columns: repeat(4, 40px); /* same 40px squares as the first-row controls, 10px gaps both ways */
-  gap: 10px;
+  grid-template-columns: repeat(5, 40px); /* 5 x 40px + 4 x 8px = 232px, inside the sidebar's 234px content width */
+  gap: 8px;
   justify-content: start;
 }
 

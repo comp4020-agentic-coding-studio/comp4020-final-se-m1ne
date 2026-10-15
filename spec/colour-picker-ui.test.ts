@@ -190,14 +190,16 @@ describe("initColourPicker: two independent instances never share state", () => 
   });
 });
 
-// The real Colours sidebar markup from public/index.html: 16 drawing presets
-// wired through the same initColourPicker state as everything else.
-describe("the 16-colour drawing palette in public/index.html", () => {
+// The real Colours sidebar markup from public/index.html: 25 drawing presets
+// (a 5 x 5 grid, row by row) wired through the same initColourPicker state as
+// everything else.
+describe("the 25-colour drawing palette in public/index.html", () => {
   const PRESETS = [
-    "#FFFFFF", "#1D1D1D", "#808080", "#C9C9C9",
-    "#E85D5D", "#F29A58", "#F4D35E", "#A9C96B",
-    "#55B78B", "#54BFC5", "#579BDD", "#7976D2",
-    "#B77BCB", "#E59BB8", "#986747", "#D6B58A",
+    "#FFFFFF", "#F7E8C8", "#D6B58A", "#C9C9C9", "#808080",
+    "#F2B5A7", "#E59BB8", "#E85D5D", "#C94C4C", "#986747",
+    "#F29A58", "#E8A83D", "#F4D35E", "#A9C96B", "#477B57",
+    "#55B78B", "#54BFC5", "#2D777D", "#579BDD", "#355C9A",
+    "#7976D2", "#684B91", "#B77BCB", "#5B4035", "#1D1D1D",
   ];
 
   beforeEach(async () => {
@@ -210,9 +212,11 @@ describe("the 16-colour drawing palette in public/index.html", () => {
   const swatch = (hex: string) => document.querySelector(`.swatch[data-color="${hex}"]`) as HTMLElement;
   const selected = () => Array.from(document.querySelectorAll(".swatch.selected")) as HTMLElement[];
 
-  it("has exactly the 16 specified colours in order, each with an accessible name", () => {
+  it("has exactly the 25 specified colours in order, none missing or duplicated, each with an accessible name", () => {
     const swatches = Array.from(document.querySelectorAll("#palette .swatch")) as HTMLElement[];
     expect(swatches.map((s) => s.dataset.color)).toEqual(PRESETS);
+    expect(new Set(PRESETS.map((hex) => hex.toLowerCase())).size).toBe(25);
+    expect(new Set(swatches.map((s) => s.getAttribute("aria-label"))).size).toBe(25); // distinct names
     for (const s of swatches) {
       expect(s.getAttribute("aria-label")).toBeTruthy();
       expect(s.tagName).toBe("BUTTON"); // keyboard-focusable

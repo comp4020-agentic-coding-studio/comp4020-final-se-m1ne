@@ -250,8 +250,8 @@ describe("Shared three-column layout keeps every existing control reachable", ()
     expect(eraserButton.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("the Colours sidebar holds 16 preset swatches, while the colour editor remains", () => {
-    expect(document.querySelectorAll("#colour-group #palette .swatch")).toHaveLength(16);
+  it("the Colours sidebar holds 25 preset swatches, while the colour editor remains", () => {
+    expect(document.querySelectorAll("#colour-group #palette .swatch")).toHaveLength(25);
     expect(document.getElementById("colour-wheel")).not.toBeNull();
     expect(document.getElementById("rgb-r-slider")).not.toBeNull();
     expect(document.getElementById("hsv-h-slider")).not.toBeNull();
