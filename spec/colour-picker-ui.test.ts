@@ -189,3 +189,79 @@ describe("initColourPicker: two independent instances never share state", () => 
     expect(changesB).toEqual(["#fdd835"]);
   });
 });
+
+// The real Colours sidebar markup from public/index.html: 16 drawing presets
+// wired through the same initColourPicker state as everything else.
+describe("the 16-colour drawing palette in public/index.html", () => {
+  const PRESETS = [
+    "#FFFFFF", "#1D1D1D", "#808080", "#C9C9C9",
+    "#E85D5D", "#F29A58", "#F4D35E", "#A9C96B",
+    "#55B78B", "#54BFC5", "#579BDD", "#7976D2",
+    "#B77BCB", "#E59BB8", "#986747", "#D6B58A",
+  ];
+
+  beforeEach(async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const html = fs.readFileSync(path.resolve(__dirname, "../public/index.html"), "utf8");
+    document.body.innerHTML = html.match(/<body>([\s\S]*)<\/body>/)![1];
+  });
+
+  const swatch = (hex: string) => document.querySelector(`.swatch[data-color="${hex}"]`) as HTMLElement;
+  const selected = () => Array.from(document.querySelectorAll(".swatch.selected")) as HTMLElement[];
+
+  it("has exactly the 16 specified colours in order, each with an accessible name", () => {
+    const swatches = Array.from(document.querySelectorAll("#palette .swatch")) as HTMLElement[];
+    expect(swatches.map((s) => s.dataset.color)).toEqual(PRESETS);
+    for (const s of swatches) {
+      expect(s.getAttribute("aria-label")).toBeTruthy();
+      expect(s.tagName).toBe("BUTTON"); // keyboard-focusable
+    }
+  });
+
+  it("clicking each preset sets exactly that drawing colour and selects only it", () => {
+    const changes: string[] = [];
+    initColourPicker({ initialColor: "#1d1d1d", onChange: (hex) => changes.push(hex) });
+    for (const hex of PRESETS) {
+      swatch(hex).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(changes.at(-1)).toBe(hex.toLowerCase());
+      expect((document.getElementById("colour-preview-hex") as HTMLElement).textContent).toBe(hex.toLowerCase());
+      expect(selected()).toEqual([swatch(hex)]);
+    }
+  });
+
+  it("a custom colour matching no preset leaves every preset unselected, and reselecting a preset highlights it again", () => {
+    initColourPicker({ initialColor: "#1d1d1d" });
+    fireInput(document.getElementById("rgb-r-number")!, "201");
+    expect(selected()).toHaveLength(0);
+    swatch("#E85D5D").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(selected()).toEqual([swatch("#E85D5D")]);
+  });
+
+  it("opening and closing the popup never resets the active colour or its selection", () => {
+    initColourPicker({ initialColor: "#1d1d1d" });
+    swatch("#579BDD").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const popover = document.getElementById("colour-popover") as HTMLElement;
+    document.getElementById("edit-colour-button")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(popover.hidden).toBe(false);
+    document.getElementById("colour-popover-close")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(popover.hidden).toBe(true);
+    expect((document.getElementById("colour-preview-hex") as HTMLElement).textContent).toBe("#579bdd");
+    expect(selected()).toEqual([swatch("#579BDD")]);
+
+    fireInput(document.getElementById("rgb-g-number")!, "7"); // now custom
+    document.getElementById("edit-colour-button")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    document.getElementById("colour-popover-close")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(selected()).toHaveLength(0);
+    expect((document.getElementById("rgb-g-number") as HTMLInputElement).value).toBe("7");
+  });
+
+  it("choosing a preset does not change the selected tool", () => {
+    initColourPicker({ initialColor: "#1d1d1d" });
+    const eraser = document.getElementById("tool-eraser")!;
+    eraser.classList.add("selected");
+    swatch("#F4D35E").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(eraser.classList.contains("selected")).toBe(true);
+    expect(document.getElementById("tool-brush")!.classList.contains("selected")).toBe(true); // markup default, untouched
+  });
+});

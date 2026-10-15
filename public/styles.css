@@ -1413,11 +1413,47 @@ body {
   flex-shrink: 0;
 }
 
-#colour-group #edit-colour-button {
+#colour-group #edit-colour-button,
+#colour-group #tool-eyedropper {
   width: 40px;
   height: 40px;
   background: var(--button-bg);
   border-color: var(--panel-border);
+}
+
+#colour-group #tool-eyedropper.selected {
+  background: var(--selected-tool-bg);
+  border-color: #93a97e;
+}
+
+/* Preset drawing colours: 4 x 4 grid of rounded squares. Wired by
+   public/colour-picker-ui.js through the existing .swatch[data-color]
+   handling (no separate colour state). */
+#palette {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  max-width: 236px; /* the desktop sidebar's content width, so swatches stay compact when the column goes full width on mobile */
+}
+
+.swatch {
+  box-sizing: border-box;
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid #cdbba5;
+  border-radius: var(--shell-radius-button);
+  cursor: pointer;
+}
+
+.swatch.selected {
+  border: 3px solid #514439;
+  box-shadow: 0 0 0 2px #ffffff inset;
+}
+
+.swatch:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* Applied to #colour-group while the Eraser is active: a visual hint that
@@ -1425,12 +1461,6 @@ body {
    and without any layout shift. */
 .colour-controls-dimmed {
   opacity: 0.55;
-}
-
-/* Eyedropper sits immediately right of the hex readout in the colour editor. */
-#colour-preview-row #tool-eyedropper {
-  width: 28px;
-  height: 28px;
 }
 
 /* Narrow screens: columns stack, nothing scrolls the page sideways. */

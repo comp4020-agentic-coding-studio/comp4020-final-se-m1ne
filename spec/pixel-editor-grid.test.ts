@@ -231,17 +231,18 @@ describe("Edit Colour button restyled as an icon button, still functional", () =
 });
 
 describe("Shared three-column layout keeps every existing control reachable", () => {
-  it("Brush, Eraser and Edit Colour are present; the Eyedropper lives in the colour editor beside the hex readout", () => {
+  it("Brush, Eraser and Edit Colour are present; the Eyedropper sits beside Custom in the Colours sidebar", () => {
     for (const id of ["tool-brush", "tool-eraser", "edit-colour-button"]) {
       const el = document.getElementById(id);
       expect(el, `#${id} should exist`).toBeTruthy();
     }
     expect(document.querySelectorAll("#tool-eyedropper")).toHaveLength(1);
     expect(document.querySelector("#tool-ribbon #tool-eyedropper")).toBeNull(); // not in the left toolbar
-    const row = document.getElementById("colour-preview-row")!;
-    const hex = document.getElementById("colour-preview-hex")!;
-    expect(row.contains(document.getElementById("tool-eyedropper"))).toBe(true);
-    expect(hex.nextElementSibling?.id).toBe("tool-eyedropper"); // immediately right of the hex readout
+    expect(document.querySelector("#colour-popover #tool-eyedropper")).toBeNull(); // not in the popup
+    const edit = document.getElementById("edit-colour-button")!;
+    expect(edit.nextElementSibling?.id).toBe("tool-eyedropper"); // immediately next to Custom, same row
+    expect(edit.parentElement).toBe(document.getElementById("tool-eyedropper")!.parentElement);
+    expect(document.getElementById("colour-group")!.contains(edit)).toBe(true);
 
     const eraserButton = document.getElementById("tool-eraser") as HTMLButtonElement;
     eraserButton.dispatchEvent(new Event("click", { bubbles: true }));
@@ -249,9 +250,8 @@ describe("Shared three-column layout keeps every existing control reachable", ()
     expect(eraserButton.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("the preset drawing-colour swatches are gone, while the colour editor remains", () => {
-    expect(document.getElementById("palette")).toBeNull();
-    expect(document.querySelectorAll(".swatch")).toHaveLength(0);
+  it("the Colours sidebar holds 16 preset swatches, while the colour editor remains", () => {
+    expect(document.querySelectorAll("#colour-group #palette .swatch")).toHaveLength(16);
     expect(document.getElementById("colour-wheel")).not.toBeNull();
     expect(document.getElementById("rgb-r-slider")).not.toBeNull();
     expect(document.getElementById("hsv-h-slider")).not.toBeNull();

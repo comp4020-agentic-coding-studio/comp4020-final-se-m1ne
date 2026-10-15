@@ -219,6 +219,28 @@
 
         <div id="colour-group">
           <span class="group-label">Colours</span>
+          <!-- Drawing-colour presets. Each .swatch[data-color] is wired by
+               public/colour-picker-ui.js to the existing colour state (click
+               sets the brush colour; an exact match is marked selected, a
+               custom colour leaves all unselected). -->
+          <div id="palette" role="group" aria-label="Preset drawing colours">
+            <button type="button" class="swatch" data-color="#FFFFFF" style="background:#FFFFFF" aria-label="White" title="White"></button>
+            <button type="button" class="swatch" data-color="#1D1D1D" style="background:#1D1D1D" aria-label="Black" title="Black"></button>
+            <button type="button" class="swatch" data-color="#808080" style="background:#808080" aria-label="Grey" title="Grey"></button>
+            <button type="button" class="swatch" data-color="#C9C9C9" style="background:#C9C9C9" aria-label="Light grey" title="Light grey"></button>
+            <button type="button" class="swatch" data-color="#E85D5D" style="background:#E85D5D" aria-label="Red" title="Red"></button>
+            <button type="button" class="swatch" data-color="#F29A58" style="background:#F29A58" aria-label="Orange" title="Orange"></button>
+            <button type="button" class="swatch" data-color="#F4D35E" style="background:#F4D35E" aria-label="Yellow" title="Yellow"></button>
+            <button type="button" class="swatch" data-color="#A9C96B" style="background:#A9C96B" aria-label="Lime green" title="Lime green"></button>
+            <button type="button" class="swatch" data-color="#55B78B" style="background:#55B78B" aria-label="Green" title="Green"></button>
+            <button type="button" class="swatch" data-color="#54BFC5" style="background:#54BFC5" aria-label="Teal" title="Teal"></button>
+            <button type="button" class="swatch" data-color="#579BDD" style="background:#579BDD" aria-label="Blue" title="Blue"></button>
+            <button type="button" class="swatch" data-color="#7976D2" style="background:#7976D2" aria-label="Indigo" title="Indigo"></button>
+            <button type="button" class="swatch" data-color="#B77BCB" style="background:#B77BCB" aria-label="Purple" title="Purple"></button>
+            <button type="button" class="swatch" data-color="#E59BB8" style="background:#E59BB8" aria-label="Pink" title="Pink"></button>
+            <button type="button" class="swatch" data-color="#986747" style="background:#986747" aria-label="Brown" title="Brown"></button>
+            <button type="button" class="swatch" data-color="#D6B58A" style="background:#D6B58A" aria-label="Tan" title="Tan"></button>
+          </div>
           <div class="group-controls">
             <div id="colour-current" aria-hidden="true"></div>
             <button
@@ -244,6 +266,21 @@
                 <circle cx="17.5" cy="14" r="1.3" fill="currentColor" />
               </svg>
             </button>
+            <button id="tool-eyedropper" class="tool-button" aria-pressed="false" aria-label="Eyedropper" title="Eyedropper">
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+                <path d="M20 3 L21.5 4.5 L12 14 L10.5 12.5 Z" fill="currentColor" />
+                <rect
+                  x="9.6"
+                  y="12.3"
+                  width="3.6"
+                  height="1.6"
+                  rx="0.4"
+                  fill="currentColor"
+                  transform="rotate(45 11.4 13.1)"
+                />
+                <circle cx="7.4" cy="18.6" r="1.15" fill="currentColor" />
+              </svg>
+            </button>
           </div>
         </div>
       </div>
@@ -259,21 +296,6 @@
         <div id="colour-preview-row">
           <span id="colour-preview-swatch" aria-hidden="true"></span>
           <span id="colour-preview-hex"></span>
-          <button id="tool-eyedropper" class="tool-button" aria-pressed="false" aria-label="Eyedropper" title="Eyedropper">
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
-              <path d="M20 3 L21.5 4.5 L12 14 L10.5 12.5 Z" fill="currentColor" />
-              <rect
-                x="9.6"
-                y="12.3"
-                width="3.6"
-                height="1.6"
-                rx="0.4"
-                fill="currentColor"
-                transform="rotate(45 11.4 13.1)"
-              />
-              <circle cx="7.4" cy="18.6" r="1.15" fill="currentColor" />
-            </svg>
-          </button>
         </div>
         <div class="colour-fields" id="colour-rgb-fields">
           <div class="colour-field">
