@@ -42,42 +42,62 @@ function horizontalOf(shorthand: string): number {
   return parseFloat(parts[1]) + parseFloat(parts[3]);
 }
 
-describe("left size rail stays within its narrow budget (styles.css source)", () => {
-  it("computes to at/under the 48px hard max (44px target), using only the declared CSS values", () => {
-    const numberRule = css.match(/#tool-size-number\s*\{[^}]*\}/)![0];
-    const fontSizeMatch = numberRule.match(/font-size:\s*([\d.]+)rem/);
-    expect(fontSizeMatch, "#tool-size-number should declare its own font-size").toBeTruthy();
-    const ownFontPx = Number(fontSizeMatch![1]) * ROOT_FONT_PX;
+function rule(selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = css.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{[^}]*\\}`));
+  expect(match, `expected a ${selector} rule`).toBeTruthy();
+  return match![0];
+}
 
-    const widthMatch = numberRule.match(/\bwidth:\s*([\d.]+)em/);
-    expect(widthMatch, "#tool-size-number should declare an explicit em width").toBeTruthy();
-    const numberInputWidthPx = Number(widthMatch![1]) * ownFontPx; // border-box width (box-sizing: border-box is global)
+describe("shared three-column editor layout (styles.css source)", () => {
+  it("left tool column is 76px, right colour column is 264px, with 12px gaps and 14px panel radius", () => {
+    expect(rule("#tool-ribbon")).toMatch(/flex:\s*0 0 76px/);
+    expect(rule("#tool-ribbon")).toMatch(/width:\s*76px/);
+    expect(rule("#colour-group")).toMatch(/flex:\s*0 0 264px/);
+    expect(rule("#colour-group")).toMatch(/width:\s*264px/);
+    expect(rule("#editor-body")).toMatch(/gap:\s*12px/);
+    expect(rule("#tool-ribbon")).toMatch(/border-radius:\s*var\(--shell-radius-panel\)/);
+    expect(css).toMatch(/--shell-radius-panel:\s*14px/);
+    expect(css).toMatch(/--shell-radius-button:\s*10px/);
+  });
 
-    const railRule = css.match(/\.studio-layout #studio-side-rail\s*\{[^}]*\}/)![0];
-    const railPadding = railRule.match(/\bpadding:\s*([^;]+);/)![1];
-    const railBorder = railRule.match(/border-right:\s*([\d.]+)px/)![1];
-    const railHorizontal = horizontalOf(railPadding) + Number(railBorder);
+  it("tool buttons are 48x48 with a 10px vertical gap, and Undo/Redo/Eyedropper are not in the tool column", () => {
+    expect(rule("#tool-group .tool-button")).toMatch(/width:\s*48px/);
+    expect(rule("#tool-group .tool-button")).toMatch(/height:\s*48px/);
+    expect(rule("#tool-group")).toMatch(/flex-direction:\s*column/);
+    expect(rule("#tool-group")).toMatch(/gap:\s*10px/);
+  });
 
-    const controlRule = css.match(/\.side-rail-control\s*\{[^}]*\}/)![0];
-    const controlPadding = controlRule.match(/\bpadding:\s*([^;]+);/)![1];
-    const controlHorizontal = horizontalOf(controlPadding);
+  it("header navigation is right-aligned in two rows (10px apart, 8px between controls)", () => {
+    const right = rule("#action-row-right");
+    expect(right).toMatch(/flex-direction:\s*column/);
+    expect(right).toMatch(/align-items:\s*flex-end/);
+    expect(right).toMatch(/gap:\s*10px/);
+    const row = rule(".nav-row");
+    expect(row).toMatch(/justify-content:\s*flex-end/);
+    expect(row).toMatch(/gap:\s*8px/);
+  });
 
-    // The number input is the widest content in the rail (wider than the
-    // 20px vertical slider and the short "Size" label) -- see the CSS's own
-    // comment for why. Total rail width = widest content + every
-    // non-content horizontal space around it.
-    const totalWidth = numberInputWidthPx + controlHorizontal + railHorizontal;
+  it("brush slider is 180px wide with a 6px track and a 20px white-bordered thumb", () => {
+    expect(rule("#tool-size-slider")).toMatch(/width:\s*180px/);
+    expect(rule("#tool-size-slider::-webkit-slider-runnable-track")).toMatch(/height:\s*6px/);
+    const thumb = rule("#tool-size-slider::-webkit-slider-thumb");
+    expect(thumb).toMatch(/width:\s*20px/);
+    expect(thumb).toMatch(/height:\s*20px/);
+    expect(thumb).toMatch(/border:\s*2px solid #ffffff/);
+  });
 
-    expect(totalWidth).toBeLessThanOrEqual(48); // hard max
-    // Also confirm it isn't narrowed so far that 3 monospace digits
-    // ("100") would no longer fit -- same box-sizing:border-box width,
-    // minus this element's own padding/border, must leave reasonable room.
-    const numberPadding = numberRule.match(/\bpadding:\s*([^;]+);/)![1];
-    const numberBorderMatch = numberRule.match(/border:\s*([\d.]+)px/);
-    const numberNonText = horizontalOf(numberPadding) + (numberBorderMatch ? Number(numberBorderMatch[1]) * 2 : 0);
-    const availableForText = numberInputWidthPx - numberNonText;
-    const roughCharWidth = ownFontPx * 0.65; // a generous monospace estimate
-    expect(availableForText).toBeGreaterThanOrEqual(roughCharWidth * 3); // "100" is 3 characters
+  it("brush size and zoom are opposite ends of one row", () => {
+    const bar = rule("#status-bar");
+    expect(bar).toMatch(/justify-content:\s*space-between/);
+    expect(bar).toMatch(/align-items:\s*center/);
+    expect(rule(".size-control")).toMatch(/align-items:\s*center/); // label, slider and value on one line
+  });
+
+  it("public and private differ only in workspace/badge colours", () => {
+    expect(css).toMatch(/#workspace\.is-public\s*\{[^}]*--workspace-surface:\s*#e4ead9;[^}]*--badge-bg:\s*#d2e0c6;[^}]*--badge-text:\s*#536d46;/);
+    expect(css).toMatch(/#workspace\.is-private\s*\{[^}]*--workspace-surface:\s*#e9e1ee;[^}]*--badge-bg:\s*#ddd0e6;[^}]*--badge-text:\s*#725b85;/);
+    expect(rule("#canvas")).toMatch(/background:\s*#ffffff/); // drawing surface is always white
   });
 });
 
@@ -100,15 +120,5 @@ describe("dotted workspace background (Pixquare reference)", () => {
     // A fixed tile size (not computed from gridWidth/gridHeight) is what
     // keeps this O(1) regardless of document size -- never a per-pixel draw.
     expect(rule![0]).toMatch(/background-size:\s*16px 16px/);
-  });
-});
-
-describe("flattened top toolbar row (Pixquare reference: one continuous row, no per-group boxes)", () => {
-  it("#tool-group and #colour-group (but not #size-group) collapse to display: contents in studio mode", () => {
-    expect(css).toMatch(/\.studio-layout #tool-group,\s*\n\s*\.studio-layout #colour-group,/);
-    // #size-group must keep its own explicit display:none override --
-    // see the CSS's own comment on why display:contents would be fragile
-    // for it specifically (content already relocated away).
-    expect(css).toMatch(/#size-group\[hidden\]\s*\{\s*\n\s*display:\s*none;/);
   });
 });

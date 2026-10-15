@@ -70,6 +70,7 @@ const remoteStrokePreviewCtx = remoteStrokePreviewCanvas.getContext("2d");
 // from this, not re-decided anywhere else.
 const roomCode = location.pathname.match(/^\/room\/([^/]+)/)?.[1]?.toUpperCase() ?? null;
 const isPublicCanvas = roomCode === null;
+document.getElementById("workspace").classList.add(isPublicCanvas ? "is-public" : "is-private");
 const opsUrl = roomCode ? `/api/rooms/${roomCode}/ops` : "/api/ops";
 const drawUrl = roomCode ? `/api/rooms/${roomCode}/ops/draw` : "/api/ops/draw";
 const eraseUrl = roomCode ? `/api/rooms/${roomCode}/ops/erase` : "/api/ops/erase";
@@ -1626,7 +1627,7 @@ if (isPublicCanvas) {
 } else {
   publicRoomControls.hidden = true;
   privateRoomControls.hidden = false;
-  roomCodeLabel.textContent = `Room: ${roomCode}`;
+  roomCodeLabel.textContent = `Private Room · ${roomCode}`;
 
   // Reuses the creation request's own presenceId when this load is the
   // post-creation redirect (see above); otherwise (direct join by typed

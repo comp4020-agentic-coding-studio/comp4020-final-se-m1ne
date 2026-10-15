@@ -98,45 +98,6 @@ body {
   height: 100%;
 }
 
-/* --- Top action row ----------------------------------------------------------
-   History (Undo/Redo) on the left; theme toggle and session/collaboration
-   controls on the right. These two sides are deliberately different kinds of
-   action (editing history vs. collaboration/navigation) and are never merged
-   into one group. */
-#session-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: 0 0 auto;
-  padding: 6px 14px;
-  gap: 8px;
-  background: var(--workspace-bg);
-  border-bottom: 1px solid var(--border);
-  font-size: 0.85rem;
-  color: var(--text-primary);
-}
-
-.action-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-#action-row-right {
-  gap: 14px;
-}
-
-.session-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-#session-controls {
-  display: flex;
-  align-items: center;
-}
-
 /* A class selector is equal specificity to the UA [hidden] rule, so source
    order alone would decide the conflict -- this override makes the hidden
    state win unconditionally. #document-settings-button needs the same
@@ -192,197 +153,6 @@ body {
   color: var(--text-primary);
 }
 
-/* --- Drawing ribbon ---------------------------------------------------------
-   Compact groups (Tools, Size, Colours), left to right, each with a small
-   label to read as a Paint-like ribbon rather than a row of plain HTML
-   controls. Separated by thin dividers; wraps onto additional rows on its own
-   at narrow widths. */
-#tool-ribbon {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  flex: 0 0 auto;
-  gap: 4px;
-  padding: 6px 14px;
-  background: var(--ribbon-bg);
-  border-bottom: 1px solid var(--border);
-}
-
-.ribbon-group {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  padding: 2px 14px;
-}
-
-/* #size-group is hidden (its content relocated to #studio-side-rail --
-   see public/pixel-editor.js) for every pixel-editor page, leaving only an
-   empty "Size" label behind otherwise. Same [hidden]-vs-class specificity
-   issue as #public-room-controls/#private-room-controls above: .ribbon-group
-   is a class selector, equal specificity to the UA [hidden] default, so an
-   explicit override is needed to make the hidden state actually win. */
-#size-group[hidden] {
-  display: none;
-}
-
-.ribbon-group:not(:first-child) {
-  border-left: 1px solid var(--divider);
-}
-
-.ribbon-group:first-child {
-  padding-left: 0;
-}
-
-.group-label {
-  font-size: 0.68rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary);
-}
-
-.group-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-#tool-group .group-controls {
-  gap: 4px;
-}
-
-/* Icon-only: width/height form a deliberate square hit area (not shrunk to
-   the icon's own size), and the svg icon is pointer-events:none so the click
-   always lands on the button regardless of which child it's aimed at. */
-.tool-button {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-.tool-button svg {
-  pointer-events: none;
-}
-
-.tool-button:hover {
-  background: var(--control-hover-bg);
-}
-
-.tool-button.selected {
-  /* A bolder 2px border (not just a tinted background) reads as a crisp,
-     deliberate selection state -- borrowing the padding it needs from the
-     button's own content area via box-sizing: border-box (set globally
-     above), so the button's own 32x32 box never shifts or grows. */
-  border-width: 2px;
-  background: var(--selected-bg);
-  border-color: var(--selected-border);
-}
-
-/* The slider and its numeric readout read as one fused widget: a shared
-   control-coloured housing rather than two loose elements side by side. */
-.size-control {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-  border: 1px solid var(--input-border);
-  border-radius: var(--radius-sm);
-  background: var(--control-bg);
-}
-
-#tool-size-slider {
-  width: 110px;
-}
-
-#tool-size-value {
-  min-width: 2.6em;
-  font-size: 0.85rem;
-  color: var(--text-primary);
-  text-align: right;
-}
-
-#tool-size-number {
-  /* Narrowed to fit the rail's own ~44px target (48px hard max), while
-     still fully fitting 3 digits (up to "100") WITHOUT truncating or
-     internally scrolling the typed value -- font-size is left untouched
-     (only width/padding changed), and the native spin-button arrows stay
-     removed below (the slider and direct typing already cover stepping),
-     so every bit of width saved there goes to the digits themselves:
-     2.5em of border-box width minus this (now tighter) padding/border
-     still leaves comfortably more room than 3 monospace digits at this
-     font-size need. */
-  width: 2.6em;
-  padding: 1px 1px;
-  border: 1px solid var(--input-border);
-  border-radius: var(--radius-sm);
-  background: var(--input-bg);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 0.85rem;
-  font-family: var(--mono-font);
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-  -moz-appearance: textfield;
-}
-
-#tool-size-number::-webkit-inner-spin-button,
-#tool-size-number::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-
-#tool-size-number[hidden] {
-  display: none;
-}
-
-#palette {
-  display: flex;
-  gap: 5px;
-}
-
-/* The passive current-colour display: purely informational, never a click
-   target for the popover -- Edit colour is the only trigger now, so there is
-   nothing left for the user to have to guess about. */
-#colour-current {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--input-border);
-  background: #1d1d1d;
-  flex-shrink: 0;
-}
-
-.swatch {
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 2px solid transparent;
-  border-radius: 50%;
-  cursor: pointer;
-  overflow: hidden;
-}
-
-.swatch.selected {
-  border-color: var(--swatch-selected-border);
-}
-
-/* Applied to #colour-group while the Eraser is active: a visual hint that
-   colour doesn't apply to the current tool, without disabling the controls
-   and without any layout shift. */
-.colour-controls-dimmed {
-  opacity: 0.55;
-}
-
 /* --- Canvas viewport ---------------------------------------------------------
    The scrollable workspace around the fixed-document canvas. Its own
    background is themed (--workspace-bg) so the surrounding workspace reads as
@@ -401,6 +171,7 @@ body {
   position: relative; /* the positioning context #pixel-grid-overlay below is placed relative to */
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
   background-color: var(--canvas-surround-bg);
   /* A dot every 16 CSS px, independent of zoom/pan/document size (a static
@@ -437,43 +208,6 @@ body {
      paint-time decoration, never a drawable pixel and never part of the
      saved artwork (that lives only in the canvas's own 2D bitmap). */
   box-shadow: inset 0 0 0 1px var(--canvas-outline);
-}
-
-/* --- Status bar ---------------------------------------------------------------
-   Compact bottom strip (Paint-inspired): fixed document size on the left,
-   Zoom Out/percentage/Zoom In/Fit on the right. Deliberately understated --
-   same font scale and muted colour as the rest of the chrome, never the most
-   visually dominant element on the page. */
-#status-bar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex: 0 0 auto;
-  padding: 4px 14px;
-  gap: 8px;
-  background: var(--workspace-bg);
-  border-top: 1px solid var(--border);
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-}
-
-#zoom-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-#zoom-controls .icon-button {
-  width: 26px;
-  height: 26px;
-}
-
-#zoom-percent {
-  min-width: 3.4em;
-  text-align: center;
-  font-family: var(--mono-font);
-  font-variant-numeric: tabular-nums;
-  color: var(--text-primary);
 }
 
 #tool-cursor {
@@ -914,150 +648,6 @@ body {
   gap: 8px;
 }
 
-/* --- Pixquare-referenced shared editor shell ----------------------------------
-   Applied unconditionally by public/pixel-editor.js (.studio-layout on
-   #workspace) for BOTH the Public pixel wall and every Private pixel-art
-   room -- one shared shell, never two separately designed interfaces (never
-   applied to a legacy freehand page, which loads public/app.js instead and
-   never touches this file's own pixel-editor.js code at all). Modelled on
-   Pixquare's own compact, canvas-focused state (docs.pixquare.art's
-   Interface page, and a supplied reference screenshot -- the expanded
-   Layers/animation/palette/preview panels shown there are NOT reproduced;
-   this project has no layers, frames, or a reference-image feature to put
-   in them): one tight, flat row of small square icon buttons for Tools and
-   Colours (no per-group label, no divider box -- see .studio-layout
-   #tool-ribbon .ribbon-group below), a narrow vertical brush-size control at
-   the canvas's own left edge (#studio-side-rail), and the canvas filling
-   whatever's left. No permanent page-height side panels -- the earlier
-   left-rail/right-panel layout this replaces made Tools/Document/Brush/
-   Colour each a full-width row, which is exactly the "broken, not a
-   coherent editor" look this corrects. Every control below is the exact
-   same element (#tool-group, #size-group, #colour-group, #room-code-label,
-   etc.) Public and Private both already use -- relocated by JS, never
-   duplicated. Public/Private differences (room navigation, the Document
-   popover) are layered on top of this identical shell by pixel-editor.js's
-   own Public/Private branch, never by a second shell. */
-
-.studio-layout #tool-ribbon {
-  padding: 4px 10px;
-  gap: 2px;
-}
-
-/* .ribbon-group's own column layout, label, and divider border are a
-   Paint-ribbon look -- not what a single flat row of icon buttons needs.
-   display: contents removes the group's own box AND its child
-   .group-controls wrapper's box entirely in studio mode, so every actual
-   button (#tool-brush, #tool-eraser, #colour-current, #palette,
-   #tool-eyedropper, #edit-colour-button) becomes a direct flex item of
-   #tool-ribbon itself, sharing its one `gap` -- one continuous row, no
-   nested boxes, no divider lines between Tools and Colours, matching the
-   reference's single undifferentiated tool cluster. #palette itself is
-   NOT flattened, so its five swatches still read as one small cluster
-   within the row, the same way a real palette naturally groups. The
-   .group-label text ("Tools"/"Colours") is still rendered (display:
-   contents only removes the WRAPPER's box, not its children) and is
-   explicitly hidden below -- icons alone read clearly in a slim toolbar. */
-/* Scoped to #tool-group/#colour-group specifically, NOT the generic
-   .ribbon-group selector: #size-group relies on a HIGHER-specificity
-   #size-group[hidden] rule (above) to stay display:none even though its
-   own content was relocated away to #studio-side-rail -- matching the
-   generic .ribbon-group selector here (which would win on specificity
-   alone) would replace that explicit, robust display:none with a fragile
-   "happens to have no children left" display:contents instead. */
-.studio-layout #tool-group,
-.studio-layout #colour-group,
-.studio-layout #tool-group .group-controls,
-.studio-layout #colour-group .group-controls {
-  display: contents;
-}
-
-.studio-layout #tool-group .group-label,
-.studio-layout #colour-group .group-label {
-  display: none;
-}
-
-/* display: contents makes this wrapper invisible to #workspace's own layout
-   by default, so #canvas-viewport behaves exactly as it always has for
-   Public/legacy (its own `flex: 1 1 auto` rule applies directly within
-   #workspace's flex column, as if this wrapper didn't exist). Only in studio
-   mode does it become a real flex row placing the side rail beside the
-   canvas. */
-#studio-workspace-row {
-  display: contents;
-}
-
-.studio-layout #studio-workspace-row {
-  display: flex;
-  flex-direction: row;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.studio-layout #canvas-viewport {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-/* Target ~52px, hard max 60px, INCLUDING padding/borders -- a narrow
-   vertical rail at the canvas's own edge (Pixquare's own size/opacity
-   slider column), never a second wide sidebar. With #tool-size-number's own
-   width below (2.8em) this comes to roughly 2(border) + 2*2(outer padding)
-   + 2.8em content ≈ 4 + 2.8*13.6 ≈ 42px -- comfortably under the hard max,
-   with margin for different default font sizes. */
-.studio-layout #studio-side-rail {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  gap: 2px;
-  /* No horizontal padding at all -- every CSS px here counts against the
-     rail's own ~44px target (48px hard max); #tool-size-number's own width
-     below is the dominant content width, so this stays at (border-right) +
-     (that width) with nothing else added. */
-  padding: 8px 0;
-  background: var(--ribbon-bg);
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
-}
-
-.side-rail-control {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 0;
-}
-
-.side-rail-label {
-  font-size: 0.65rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary);
-}
-
-/* A vertical range input via the standards-based writing-mode approach
-   (supported in current Chrome/Edge/Firefox/Safari) rather than a transform
-   hack -- direction: rtl keeps the usual "up increases the value" feel. */
-.side-rail-control input[type="range"] {
-  writing-mode: vertical-lr;
-  direction: rtl;
-  width: 20px;
-  height: 120px;
-  margin: 0;
-  accent-color: var(--focus-ring);
-}
-
-.side-rail-control output {
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-primary);
-}
-
-.studio-layout #studio-side-rail .size-control {
-  display: contents; /* the relocated #size-group's own wrapper div adds no extra box here */
-}
-
 /* --- Document settings popover ------------------------------------------------
    Same chrome as #colour-popover/#room-create-popover (shared tokens, same
    header/body shape) -- room code, read-only dimensions, and (for a pixel-art
@@ -1381,48 +971,11 @@ body {
   width: 90px;
 }
 
-@media (max-width: 700px) {
-  .studio-layout #studio-workspace-row {
-    flex-direction: column;
-  }
-
-  .studio-layout #studio-side-rail {
-    flex-direction: row;
-    width: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    overflow-x: auto;
-    overflow-y: visible;
-    justify-content: center;
-  }
-
-  .studio-layout #canvas-viewport {
-    min-height: 220px;
-  }
-
-  #zoom-slider {
-    width: 60px;
-  }
-}
-
 /* --- Responsive foundation ---------------------------------------------------
    At narrow viewports the ribbon already wraps on its own (flex-wrap above);
    this block only shrinks the few controls that would otherwise overflow a
    ~390px width, and turns the popover into a bottom-anchored overlay sheet. */
 @media (max-width: 600px) {
-  #session-bar {
-    flex-wrap: wrap;
-    row-gap: 6px;
-  }
-
-  #tool-size-slider {
-    width: 80px;
-  }
-
-  .ribbon-group {
-    padding: 2px 10px;
-  }
-
   #colour-popover {
     position: fixed !important;
     left: 12px !important;
@@ -1438,16 +991,488 @@ body {
     grid-template-columns: 14px 1fr 44px;
   }
 
-  #status-bar {
-    padding: 4px 10px;
-    font-size: 0.72rem;
+}
+
+/* --- Shared editor shell (Public Canvas and Private Room) ---------------------
+   One three-column layout for both pages: header (brand left, two
+   right-aligned navigation rows), left tool column (76px), centre canvas
+   column (flexible), right colour column (264px). Public/Private differ only
+   in the centre workspace and room-identifier colours (see is-public /
+   is-private below). Every control here is the same element the editor
+   already had -- moved, never duplicated. Page background, panel and text
+   colours are the shared-shell literals below; the drawing surface itself is
+   always white. */
+#workspace {
+  --shell-bg: #f6f0e6;
+  --panel-bg: #fff9f0;
+  --panel-border: #e2d3c0;
+  --button-bg: #f0e7d9;
+  --shell-text: #514439;
+  --shell-text-secondary: #806e5a;
+  --selected-tool-bg: #dfe9d4;
+  --shell-radius-panel: 14px;
+  --shell-radius-button: 10px;
+  background: var(--shell-bg);
+  color: var(--shell-text);
+  padding: 0 20px 16px;
+}
+
+#workspace.is-public {
+  --workspace-surface: #e4ead9;
+  --badge-bg: #d2e0c6;
+  --badge-text: #536d46;
+}
+
+#workspace.is-private {
+  --workspace-surface: #e9e1ee;
+  --badge-bg: #ddd0e6;
+  --badge-text: #725b85;
+}
+
+html,
+body {
+  background: #f6f0e6;
+}
+
+/* Header ------------------------------------------------------------------ */
+#session-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px 0;
+  color: var(--shell-text);
+  font-size: 0.85rem;
+}
+
+#brand {
+  font-size: 1.25rem;
+  font-weight: 800;
+  line-height: 40px;
+  color: var(--shell-text);
+}
+
+#action-row-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.nav-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.session-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* A class selector is equal specificity to the UA [hidden] rule, so source
+   order alone would decide the conflict -- these overrides make the hidden
+   state win unconditionally against .app-button's own display. */
+#public-room-controls[hidden],
+#private-room-controls[hidden],
+#document-settings-button[hidden],
+#profile-button[hidden] {
+  display: none;
+}
+
+#workspace .app-button {
+  border-color: var(--panel-border);
+  border-radius: var(--shell-radius-button);
+  background: var(--button-bg);
+  color: var(--shell-text);
+}
+
+#workspace .app-button:hover {
+  background: #e8dcc9;
+}
+
+#workspace .app-button:active {
+  background: #dfd0b9;
+}
+
+#workspace .app-button:disabled {
+  background: var(--button-bg);
+  color: #b4a590;
+  border-color: var(--panel-border);
+  opacity: 0.7;
+}
+
+/* The room-code input and its Join button read as one fused control. */
+.join-control {
+  display: inline-flex;
+  align-items: stretch;
+  margin: 0;
+}
+
+.join-control #join-room-code {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+}
+
+.join-control button {
+  border-top-left-radius: 0 !important;
+  border-bottom-left-radius: 0 !important;
+}
+
+#join-room-code {
+  width: 6em;
+  padding: 4px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--shell-radius-button);
+  background: #fffdf9;
+  color: var(--shell-text);
+  font-size: 0.85rem;
+  font-family: inherit;
+  text-transform: uppercase;
+}
+
+/* Body: three columns --------------------------------------------------- */
+#editor-body {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 12px;
+  min-height: 0;
+}
+
+#tool-ribbon {
+  flex: 0 0 76px;
+  width: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 14px 0;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--shell-radius-panel);
+}
+
+#tool-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Icon-only tool button: a deliberate square hit area, svg never intercepts
+   the click. */
+.tool-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: var(--shell-radius-button);
+  background: transparent;
+  color: var(--shell-text);
+  cursor: pointer;
+}
+
+.tool-button svg {
+  pointer-events: none;
+}
+
+.tool-button:hover {
+  background: var(--button-bg);
+}
+
+.tool-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tool-button.selected {
+  border-width: 2px;
+  background: var(--selected-tool-bg);
+  border-color: #93a97e;
+}
+
+#tool-group .tool-button {
+  width: 48px;
+  height: 48px;
+  background: var(--button-bg);
+  border-color: var(--panel-border);
+}
+
+#tool-group .tool-button.selected {
+  background: var(--selected-tool-bg);
+  border-color: #93a97e;
+}
+
+#canvas-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 10px;
+  padding: 16px;
+  background: var(--workspace-surface);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--shell-radius-panel);
+}
+
+#canvas-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.action-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#room-code-label {
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: var(--badge-bg);
+  color: var(--badge-text);
+  font-family: var(--mono-font);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+#canvas-viewport {
+  border-radius: 0;
+  background-color: transparent;
+  background-image: none;
+}
+
+/* Lower row: brush size (left) and zoom (right), opposite ends of one line. */
+#status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  gap: 8px 16px;
+  color: var(--shell-text-secondary);
+  font-size: 0.85rem;
+}
+
+.size-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.size-label {
+  font-weight: 600;
+  color: var(--shell-text-secondary);
+}
+
+#tool-size-slider {
+  width: 180px;
+  height: 20px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+#tool-size-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: #cdbba5;
+}
+
+#tool-size-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: #cdbba5;
+}
+
+#tool-size-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: -7px;
+  border-radius: 50%;
+  background: #93a97e;
+  border: 2px solid #ffffff;
+  box-shadow: 0 1px 3px rgba(81, 68, 57, 0.4);
+}
+
+#tool-size-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #93a97e;
+  border: 2px solid #ffffff;
+  box-shadow: 0 1px 3px rgba(81, 68, 57, 0.4);
+}
+
+#tool-size-value {
+  min-width: 2.6em;
+  color: var(--shell-text);
+  text-align: left;
+}
+
+#tool-size-number {
+  width: 3.2em;
+  padding: 2px 4px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: #fffdf9;
+  color: var(--shell-text);
+  font: inherit;
+  font-family: var(--mono-font);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+#tool-size-number::-webkit-inner-spin-button,
+#tool-size-number::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+#tool-size-number[hidden] {
+  display: none;
+}
+
+#zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#zoom-controls .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+#zoom-slider {
+  width: 90px;
+}
+
+#zoom-percent {
+  min-width: 3.4em;
+  text-align: center;
+  font-family: var(--mono-font);
+  font-variant-numeric: tabular-nums;
+  color: var(--shell-text);
+}
+
+/* Right colour column ------------------------------------------------------ */
+#colour-group {
+  flex: 0 0 264px;
+  width: 264px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--shell-radius-panel);
+}
+
+.group-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--shell-text-secondary);
+}
+
+#colour-group .group-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#colour-current {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--shell-radius-button);
+  border: 1px solid var(--panel-border);
+  background: #1d1d1d;
+  flex-shrink: 0;
+}
+
+#colour-group #edit-colour-button {
+  width: 40px;
+  height: 40px;
+  background: var(--button-bg);
+  border-color: var(--panel-border);
+}
+
+/* Applied to #colour-group while the Eraser is active: a visual hint that
+   colour doesn't apply to the current tool, without disabling the controls
+   and without any layout shift. */
+.colour-controls-dimmed {
+  opacity: 0.55;
+}
+
+/* Eyedropper sits immediately right of the hex readout in the colour editor. */
+#colour-preview-row #tool-eyedropper {
+  width: 28px;
+  height: 28px;
+}
+
+/* Narrow screens: columns stack, nothing scrolls the page sideways. */
+@media (max-width: 900px) {
+  #workspace {
+    padding: 0 12px 12px;
+    height: auto;
+    min-height: 100%;
   }
 
-  #zoom-controls {
-    gap: 4px;
+  html,
+  body {
+    overflow: auto;
   }
 
-  #zoom-percent {
-    min-width: 2.8em;
+  #session-bar {
+    flex-wrap: wrap;
+  }
+
+  #editor-body {
+    flex-direction: column;
+  }
+
+  #tool-ribbon,
+  #colour-group {
+    flex: 0 0 auto;
+    width: auto;
+  }
+
+  #tool-ribbon {
+    padding: 8px;
+  }
+
+  #tool-group {
+    flex-direction: row;
+  }
+
+  #canvas-viewport {
+    min-height: 260px;
+  }
+
+  #tool-size-slider {
+    width: 120px;
   }
 }

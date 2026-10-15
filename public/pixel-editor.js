@@ -95,9 +95,6 @@ const leaveRoomCancelButton = document.getElementById("leave-room-cancel");
 const leaveRoomConfirmButton = document.getElementById("leave-room-confirm");
 const backToPublicLink = document.getElementById("back-to-public");
 const workspace = document.getElementById("workspace");
-const sizeGroup = document.getElementById("size-group");
-const studioSideRail = document.getElementById("studio-side-rail");
-const sideRailBrushSize = document.getElementById("side-rail-brush-size");
 const documentSettingsButton = document.getElementById("document-settings-button");
 const documentSettingsPopover = document.getElementById("document-settings-popover");
 const documentSettingsClose = document.getElementById("document-settings-close");
@@ -965,24 +962,13 @@ function bootPixelEditor(gridWidth, gridHeight) {
     location.href = "/canvas";
   }
 
-  // The shared Procreate/Pixquare-inspired editor shell: ONE DOM layout,
-  // top toolbar, left control rail, canvas workspace, and status bar, used
-  // identically by Public and every Private studio -- never two separately
-  // designed interfaces. #tool-ribbon (Tools/Size/Colours) stays a compact
-  // top toolbar via .studio-layout's own CSS; only the brush-size slider and
-  // its direct numeric input -- #size-group's own `.size-control` wrapper
-  // div, moved whole via appendChild (which MOVES a node, keeping its id,
-  // markup, and every already-wired listener) -- relocate to the canvas's
-  // own left edge (#studio-side-rail). #size-group itself is left behind
-  // empty (its "Size" label has no content to label in a slim top toolbar),
-  // so it's hidden rather than shown as a stray empty group. Applied
-  // unconditionally (both Public and Private): mode-specific differences are
-  // controlled below by explicit Public/Private state (room navigation,
-  // document settings content), never by duplicating this shell.
+  // The shared editor shell: ONE DOM layout (header, left tool column,
+  // canvas column, right colour column) used identically by Public and every
+  // Private studio. The mode-specific differences are the Public/Private
+  // class below (workspace/badge colours) and the explicit Public/Private
+  // state further down (room navigation, room identifier).
   workspace.classList.add("studio-layout");
-  studioSideRail.hidden = false;
-  sideRailBrushSize.appendChild(sizeGroup.querySelector(".size-control"));
-  sizeGroup.hidden = true;
+  workspace.classList.add(isPublicPixelWall ? "is-public" : "is-private");
 
   // #document-settings-button/#document-settings-popover: shown for BOTH
   // Public and Private (dimensions + the Grid toggle apply to either); a
@@ -1080,19 +1066,8 @@ function bootPixelEditor(gridWidth, gridHeight) {
     publicRoomControls.hidden = true;
     privateRoomControls.hidden = false;
 
-    // Room code additionally relocates into the
-    // (already shared, already-wired-above) #document-settings-popover --
-    // not a full-width persistent row. #back-to-public is deliberately NOT
-    // relocated: it stays exactly where the markup already has it, a direct
-    // sibling of #document-settings-button inside #private-room-controls,
-    // so it remains visible in the header without opening anything -- a
-    // directly-visible Back to Public control is mandatory, never exclusive
-    // to the Document popover.
-    documentSettingsBody.appendChild(roomCodeLabel);
-
-    // Read-only document information -- this room's dimensions are fixed
-    // forever at creation, never an editable control inside a room.
-    roomCodeLabel.textContent = `Room: ${roomCode}`;
+    // The room identifier sits above the canvas, opposite Undo/Redo.
+    roomCodeLabel.textContent = `Private Room · ${roomCode}`;
 
     const pidFromUrl = new URLSearchParams(location.search).get("pid");
     presenceId = pidFromUrl && pidFromUrl.length > 0 ? pidFromUrl : crypto.randomUUID();

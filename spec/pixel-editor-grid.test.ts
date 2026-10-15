@@ -230,14 +230,18 @@ describe("Edit Colour button restyled as an icon button, still functional", () =
   });
 });
 
-describe("Shared controls remain reachable after flattening the top toolbar into one row", () => {
-  it("Pencil, Eraser, Eyedropper, palette swatches, and Edit Colour are all still present and clickable", () => {
-    for (const id of ["tool-brush", "tool-eraser", "tool-eyedropper", "edit-colour-button"]) {
+describe("Shared three-column layout keeps every existing control reachable", () => {
+  it("Brush, Eraser and Edit Colour are present; the Eyedropper lives in the colour editor beside the hex readout", () => {
+    for (const id of ["tool-brush", "tool-eraser", "edit-colour-button"]) {
       const el = document.getElementById(id);
       expect(el, `#${id} should exist`).toBeTruthy();
     }
-    const swatches = document.querySelectorAll("#palette .swatch");
-    expect(swatches.length).toBeGreaterThan(0);
+    expect(document.querySelectorAll("#tool-eyedropper")).toHaveLength(1);
+    expect(document.querySelector("#tool-ribbon #tool-eyedropper")).toBeNull(); // not in the left toolbar
+    const row = document.getElementById("colour-preview-row")!;
+    const hex = document.getElementById("colour-preview-hex")!;
+    expect(row.contains(document.getElementById("tool-eyedropper"))).toBe(true);
+    expect(hex.nextElementSibling?.id).toBe("tool-eyedropper"); // immediately right of the hex readout
 
     const eraserButton = document.getElementById("tool-eraser") as HTMLButtonElement;
     eraserButton.dispatchEvent(new Event("click", { bubbles: true }));
@@ -245,15 +249,27 @@ describe("Shared controls remain reachable after flattening the top toolbar into
     expect(eraserButton.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("the now-redundant group labels (Tools/Colours/Size) are not visible text in the toolbar", () => {
-    // #size-group is hidden entirely (existing behaviour); #tool-group and
-    // #colour-group stay in the DOM (display: contents) but their own
-    // .group-label text must not render -- see the .studio-layout
-    // #tool-group/#colour-group .group-label rule in styles.css.
-    for (const groupId of ["tool-group", "colour-group"]) {
-      const label = document.querySelector(`#${groupId} .group-label`);
-      expect(label, `#${groupId} .group-label should still exist in the DOM`).toBeTruthy();
+  it("the preset drawing-colour swatches are gone, while the colour editor remains", () => {
+    expect(document.getElementById("palette")).toBeNull();
+    expect(document.querySelectorAll(".swatch")).toHaveLength(0);
+    expect(document.getElementById("colour-wheel")).not.toBeNull();
+    expect(document.getElementById("rgb-r-slider")).not.toBeNull();
+    expect(document.getElementById("hsv-h-slider")).not.toBeNull();
+  });
+
+  it("Undo/Redo sit in the canvas toolbar, not the left tool column, beside the room identifier", () => {
+    const toolbar = document.getElementById("canvas-toolbar")!;
+    expect(toolbar.contains(document.getElementById("undo-button"))).toBe(true);
+    expect(toolbar.contains(document.getElementById("redo-button"))).toBe(true);
+    expect(toolbar.contains(document.getElementById("room-code-label"))).toBe(true);
+    expect(document.getElementById("tool-ribbon")!.querySelector("#undo-button, #redo-button")).toBeNull();
+  });
+
+  it("brush size and zoom share the row under the canvas", () => {
+    const row = document.getElementById("status-bar")!;
+    for (const id of ["tool-size-slider", "tool-size-value", "zoom-out-button", "zoom-percent", "zoom-in-button", "fit-button"]) {
+      expect(row.contains(document.getElementById(id)), `#${id} should be in the lower row`).toBe(true);
     }
-    expect(document.getElementById("size-group")!.hidden).toBe(true);
+    expect(document.querySelector('label[for="tool-size-slider"]')!.textContent).toBe("Brush size");
   });
 });
