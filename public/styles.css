@@ -1019,6 +1019,8 @@ body {
   --shell-text: #514439;
   --shell-text-secondary: #806e5a;
   --selected-tool-bg: #dfe9d4;
+  --workspace-accent: #93a97e;
+  --workspace-accent-text: var(--shell-text);
   --shell-radius-panel: 14px;
   --shell-radius-button: 10px;
   background: var(--shell-bg);
@@ -1036,6 +1038,9 @@ body {
   --workspace-surface: #e9e1ee;
   --badge-bg: #ddd0e6;
   --badge-text: #725b85;
+  --selected-tool-bg: #e5dcec;
+  --workspace-accent: #a18ab5;
+  --workspace-accent-text: #725b85;
 }
 
 html,
@@ -1209,7 +1214,7 @@ body {
 .tool-button.selected {
   border-width: 2px;
   background: var(--selected-tool-bg);
-  border-color: #93a97e;
+  border-color: var(--workspace-accent);
 }
 
 #tool-group .tool-button {
@@ -1221,7 +1226,8 @@ body {
 
 #tool-group .tool-button.selected {
   background: var(--selected-tool-bg);
-  border-color: #93a97e;
+  border-color: var(--workspace-accent);
+  color: var(--workspace-accent-text);
 }
 
 #canvas-column {
@@ -1319,7 +1325,7 @@ body {
   height: 20px;
   margin-top: -7px;
   border-radius: 50%;
-  background: #93a97e;
+  background: var(--workspace-accent);
   border: 2px solid #ffffff;
   box-shadow: 0 1px 3px rgba(81, 68, 57, 0.4);
 }
@@ -1328,7 +1334,7 @@ body {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #93a97e;
+  background: var(--workspace-accent);
   border: 2px solid #ffffff;
   box-shadow: 0 1px 3px rgba(81, 68, 57, 0.4);
 }
@@ -1431,7 +1437,7 @@ body {
 }
 
 #colour-group #tool-eyedropper.selected {
-  background: var(--selected-tool-bg);
+  background: #dfe9d4; /* the Colours sidebar keeps its sage selected state in both rooms */
   border-color: #93a97e;
 }
 
