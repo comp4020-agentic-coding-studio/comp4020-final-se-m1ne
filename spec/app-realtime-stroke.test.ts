@@ -412,27 +412,25 @@ describe("Public Canvas presence (Online Now regression)", () => {
   });
 });
 
-describe("Part 2: theme toggle", () => {
-  it("clicking the toggle flips the theme and updates the button label immediately", async () => {
-    document.documentElement.dataset.theme = "light";
+describe("Part 2: no theme switching", () => {
+  it("the editor has no theme toggle and does not set a data-theme", async () => {
+    document.documentElement.removeAttribute("data-theme");
     await bootAppForTest(posted);
-    const toggle = document.getElementById("theme-toggle")!;
-
-    expect(toggle.textContent).toBe("Light");
-    toggle.dispatchEvent(new Event("click", { bubbles: true }));
-    expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(toggle.textContent).toBe("Dark");
-
-    toggle.dispatchEvent(new Event("click", { bubbles: true }));
-    expect(document.documentElement.dataset.theme).toBe("light");
-    expect(toggle.textContent).toBe("Light");
+    expect(document.getElementById("theme-toggle")).toBeNull();
+    expect(document.documentElement.dataset.theme).toBeUndefined();
   });
 
-  it("never persists a manual choice to localStorage -- a later load must re-derive from system preference, not override it", async () => {
-    document.documentElement.dataset.theme = "light";
+  it("the status bar shows zoom controls but no fixed document-size readout", async () => {
     await bootAppForTest(posted);
-    document.getElementById("theme-toggle")!.dispatchEvent(new Event("click", { bubbles: true }));
-    expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(localStorage.getItem("theme")).toBeNull();
+    expect(document.getElementById("status-doc-size")).toBeNull();
+    expect(document.getElementById("zoom-percent")).not.toBeNull();
+    expect(document.getElementById("zoom-in-button")).not.toBeNull();
+    expect(document.getElementById("zoom-out-button")).not.toBeNull();
+  });
+
+  it("private-room toolbar has no Background control", async () => {
+    await bootAppForTest(posted);
+    expect(document.getElementById("room-background-control")).toBeNull();
+    expect(document.getElementById("room-background-select")).toBeNull();
   });
 });

@@ -82,7 +82,7 @@ describe("left size rail stays within its narrow budget (styles.css source)", ()
 });
 
 describe("pixel-grid overlay uses the shared blue accent, not a neutral gray", () => {
-  it("--grid-line is defined for both themes and referenced by #pixel-grid-overlay", () => {
+  it("--grid-line is defined and referenced by #pixel-grid-overlay", () => {
     expect(tokensCss).toMatch(/--grid-line:/);
     const overlayRule = css.match(/#pixel-grid-overlay\s*\{[^}]*\}/);
     expect(overlayRule, "#pixel-grid-overlay rule should exist").toBeTruthy();

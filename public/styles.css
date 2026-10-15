@@ -154,29 +154,6 @@ body {
    the exact same .app-button component -- see that file for the actual
    rules; nothing here redefines them. */
 
-/* The theme toggle is an .app-button plus a small state dot -- no icon
-   library, just a CSS-drawn filled/outline circle so the current state reads
-   at a glance without relying on the text label alone. */
-.theme-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.theme-toggle::before {
-  content: "";
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  border: 1.5px solid var(--text-secondary);
-  background: transparent;
-}
-
-.theme-toggle[aria-pressed="true"]::before {
-  background: var(--text-primary);
-  border-color: var(--text-primary);
-}
-
 /* The room-code input and its Join button read as one fused control: shared
    border, no visible gap, joined corners where the two pieces meet. */
 .join-control {
@@ -213,38 +190,6 @@ body {
   font-weight: 600;
   letter-spacing: 0.05em;
   color: var(--text-primary);
-}
-
-#room-background-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-secondary);
-  font-size: 0.8rem;
-}
-
-#room-background-select {
-  padding: 3px 6px;
-  border: 1px solid var(--input-border);
-  border-radius: var(--radius-sm);
-  background: var(--input-bg);
-  color: var(--text-primary);
-  font-size: 0.8rem;
-  font-family: inherit;
-}
-
-#room-background-colour-input {
-  width: 28px;
-  height: 22px;
-  padding: 1px;
-  border: 1px solid var(--input-border);
-  border-radius: var(--radius-sm);
-  background: var(--control-bg);
-  cursor: pointer;
-}
-
-#room-background-colour-input[hidden] {
-  display: none;
 }
 
 /* --- Drawing ribbon ---------------------------------------------------------
@@ -502,7 +447,7 @@ body {
 #status-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   flex: 0 0 auto;
   padding: 4px 14px;
   gap: 8px;
@@ -510,11 +455,6 @@ body {
   border-top: 1px solid var(--border);
   font-size: 0.78rem;
   color: var(--text-secondary);
-}
-
-#status-doc-size {
-  font-family: var(--mono-font);
-  font-variant-numeric: tabular-nums;
 }
 
 #zoom-controls {
@@ -847,13 +787,6 @@ body {
     linear-gradient(-45deg, transparent 75%, #d8d8d8 75%);
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
-}
-
-:root[data-theme="dark"] #canvas.pixel-bg-checkerboard {
-  background-color: #2b2b2f;
-  background-image: linear-gradient(45deg, #3a3a40 25%, transparent 25%),
-    linear-gradient(-45deg, #3a3a40 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #3a3a40 75%),
-    linear-gradient(-45deg, transparent 75%, #3a3a40 75%);
 }
 
 /* Sized and positioned in JS (public/app.js's positionRemoteStrokePreview)
@@ -1191,20 +1124,13 @@ body {
   color: var(--text-primary);
 }
 
-/* The relocated #room-code-label/#room-background-control read as rows
+/* The relocated #room-code-label reads as a row
    inside this popover instead of inline session-bar chrome -- same
    elements, only the surrounding presentation differs. #back-to-public is
    NOT relocated here (see public/pixel-editor.js) -- it stays directly
    visible in the session bar, so there is no rule for it in this popover. */
-#document-settings-body #room-code-label,
-#document-settings-body #room-background-control {
+#document-settings-body #room-code-label {
   width: 100%;
-}
-
-#document-settings-body #room-background-control {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
 }
 
 /* --- Profile popover (freehand only) -------------------------------------------

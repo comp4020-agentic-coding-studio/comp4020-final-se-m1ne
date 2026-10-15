@@ -33,13 +33,11 @@ describe("the landing canvas's appearance is independent of system theme", () =>
     expect(rule).not.toMatch(/var\(--/); // no token -- nothing for a dark override to touch
   });
 
-  it('no [data-theme="dark"] block anywhere overrides #landing-canvas', () => {
-    const darkBlocks = landingCss.match(/:root\[data-theme="dark"\]\s*\{[^}]*\}/g) ?? [];
-    for (const darkBlock of darkBlocks) {
-      expect(darkBlock).not.toMatch(/#landing-canvas/);
-    }
-    const tokenDarkBlock = tokensCss.match(/:root\[data-theme="dark"\]\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(tokenDarkBlock).not.toMatch(/#landing-canvas/);
+  it("there is no dark theme at all: no [data-theme] override or prefers-color-scheme script on either page", () => {
+    expect(tokensCss).not.toMatch(/data-theme/);
+    expect(landingCss).not.toMatch(/data-theme/);
+    expect(landingHtml).not.toMatch(/prefers-color-scheme|dataset\.theme/);
+    expect(indexHtml).not.toMatch(/prefers-color-scheme|dataset\.theme/);
   });
 });
 
@@ -65,9 +63,7 @@ describe("shared typography/component system, separate editor/landing surface pa
 
   it("the editor restores its own light-mode surface tokens (overriding theme-tokens.css's shared values for this page only), but defines no dark override of its own", () => {
     expect(stylesCss).toMatch(/:root\s*\{/);
-    // Deliberately absent: dark mode stays whatever theme-tokens.css already
-    // says, shared with the landing page exactly as before this round.
-    expect(stylesCss).not.toMatch(/:root\[data-theme="dark"\]\s*\{/);
+    expect(stylesCss).not.toMatch(/data-theme/);
   });
 
   it("shared accent/typography tokens (radius, mono font, the landing page's sage accent) are not duplicated in styles.css", () => {

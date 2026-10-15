@@ -56,7 +56,6 @@ import {
   cellBoundsForPoints,
   boundsIntersect,
   clampCanvasDimension,
-  resolveNewCanvasBackground,
 } from "./pixeldoc.js";
 
 const canvas = document.getElementById("canvas");
@@ -77,21 +76,13 @@ const roomCreateCancelButton = document.getElementById("room-create-cancel");
 const roomCreateConfirmButton = document.getElementById("room-create-confirm");
 const newCanvasWidthInput = document.getElementById("new-canvas-width");
 const newCanvasHeightInput = document.getElementById("new-canvas-height");
-const newCanvasBackgroundSelect = document.getElementById("new-canvas-background");
-const newCanvasBackgroundColourField = document.getElementById("new-canvas-background-colour-field");
-const newCanvasBackgroundColourInput = document.getElementById("new-canvas-background-colour");
 const joinRoomForm = document.getElementById("join-room-form");
 const joinRoomCodeInput = document.getElementById("join-room-code");
 const publicRoomControls = document.getElementById("public-room-controls");
 const privateRoomControls = document.getElementById("private-room-controls");
 const roomCodeLabel = document.getElementById("room-code-label");
-const roomBackgroundControl = document.getElementById("room-background-control");
-const roomBackgroundSelect = document.getElementById("room-background-select");
-const roomBackgroundColourInput = document.getElementById("room-background-colour-input");
 const undoButton = document.getElementById("undo-button");
 const redoButton = document.getElementById("redo-button");
-const themeToggle = document.getElementById("theme-toggle");
-const statusDocSize = document.getElementById("status-doc-size");
 const zoomOutButton = document.getElementById("zoom-out-button");
 const zoomInButton = document.getElementById("zoom-in-button");
 const zoomSlider = document.getElementById("zoom-slider");
@@ -142,36 +133,11 @@ async function main() {
     await import("./app.js");
     return;
   }
-  bootPixelEditor(resolved.width, resolved.height, resolved.background);
+  bootPixelEditor(resolved.width, resolved.height);
 }
 
-function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
-  // Theme is a local, per-page-load UI preference only -- never sent to the
-  // server, never part of collaborative state, never persisted across
-  // reloads (every load re-initializes from the system's own
-  // prefers-color-scheme; see index.html's own inline head script -- a
-  // manual toggle here only ever affects the CURRENT page view). Wired only
-  // inside bootPixelEditor, which runs ONLY for the "pixel" mode branch of
-  // main() below, never for "legacy" (which hands off to app.js entirely,
-  // app.js's own near-identical theme code taking over exclusively) --
-  // previously this was wired unconditionally at module top level, so it
-  // ran for EVERY page regardless of dispatch, and once a legacy page also
-  // ran app.js's own copy, the two listeners toggled the theme back and
-  // forth on every single click, cancelling out to no visible change at
-  // all. One listener per page, never two.
-  function syncThemeToggleUI() {
-    const theme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
-    themeToggle.textContent = theme === "dark" ? "Dark" : "Light";
-    themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
-    themeToggle.setAttribute("aria-label", `Toggle theme, currently ${theme}`);
-  }
-  themeToggle.addEventListener("click", () => {
-    document.documentElement.dataset.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-    syncThemeToggleUI();
-  });
-  syncThemeToggleUI();
-  // Same reasoning as the theme toggle just above: wired only inside
-  // bootPixelEditor (the "pixel" branch only), never at module top level, so
+function bootPixelEditor(gridWidth, gridHeight) {
+  // Wired only inside bootPixelEditor (the "pixel" branch only), never at module top level, so
   // it is never double-registered alongside public/app.js's own copy of this
   // same wiring on a "legacy" page.
   wireHelpPopover();
@@ -213,14 +179,9 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   canvas.width = gridWidth;
   canvas.height = gridHeight;
   canvas.classList.add("pixel-canvas"); // crisp (non-smoothed) CSS scaling, see styles.css
-  // Public is always a solid opaque white document -- never a transparency
-  // checkerboard, and never configurable. A Private studio's own background
-  // (transparent/white/custom) was already fetched alongside its dimensions
-  // (main()'s GET /api/rooms/:code, via resolveEditorMode) -- applied here,
-  // and again whenever changeBackground (below) persists a change.
-  let background = isPublicPixelWall ? { kind: "white", color: null } : initialBackground;
-  applyCanvasBackground(background);
-  statusDocSize.textContent = `${gridWidth} × ${gridHeight}`;
+  // Every document (Public and Private alike) is a solid opaque white
+  // canvas -- the background is no longer configurable from the UI.
+  applyCanvasBackground({ kind: "white", color: null });
 
   let myOwnerId = null;
   let allOps = []; // authoritative, server-confirmed pixel ops for this document, in seq order
@@ -1025,8 +986,8 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
 
   // #document-settings-button/#document-settings-popover: shown for BOTH
   // Public and Private (dimensions + the Grid toggle apply to either); a
-  // pixel-art room additionally relocates its own room code/background
-  // control into the popover body, below. Never shown for a legacy room --
+  // pixel-art room additionally relocates its own room code into the
+  // popover body, below. Never shown for a legacy room --
   // this code never runs for one at all (main() hands off to app.js first).
   documentSettingsButton.hidden = false;
   documentDimensions.textContent = `${gridWidth} × ${gridHeight}`;
@@ -1058,11 +1019,10 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
   });
 
   if (isPublicPixelWall) {
-    // The New Canvas dialog: independent width/height and a background
-    // choice, confirmed before anything is created -- not a permanently-
-    // visible toolbar control. Width/height are never editable again once a
-    // room exists (server/db.js's own immutability); background can still be
-    // changed later (see the Private-room branch below).
+    // The New Canvas dialog: independent width/height, confirmed before
+    // anything is created -- not a permanently-visible toolbar control.
+    // Width/height are never editable again once a room exists
+    // (server/db.js's own immutability). The canvas is always white.
     function openRoomCreatePopover() {
       const rect = createRoomButton.getBoundingClientRect();
       const popoverWidth = 240;
@@ -1096,20 +1056,16 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     newCanvasHeightInput.addEventListener("input", () => {
       newCanvasHeightInput.value = String(clampCanvasDimension(newCanvasHeightInput.value));
     });
-    newCanvasBackgroundSelect.addEventListener("change", () => {
-      newCanvasBackgroundColourField.hidden = newCanvasBackgroundSelect.value !== "custom";
-    });
 
     roomCreateConfirmButton.addEventListener("click", async () => {
       const width = clampCanvasDimension(newCanvasWidthInput.value);
       const height = clampCanvasDimension(newCanvasHeightInput.value);
-      const background = resolveNewCanvasBackground(newCanvasBackgroundSelect.value, newCanvasBackgroundColourInput.value);
       closeRoomCreatePopover();
       const newPresenceId = crypto.randomUUID();
       const res = await fetch("/api/rooms", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ presenceId: newPresenceId, width, height, background }),
+        body: JSON.stringify({ presenceId: newPresenceId, width, height }),
       });
       const { code } = await res.json();
       location.href = `/room/${code}?pid=${encodeURIComponent(newPresenceId)}`;
@@ -1124,7 +1080,7 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     publicRoomControls.hidden = true;
     privateRoomControls.hidden = false;
 
-    // Room code and background control additionally relocate into the
+    // Room code additionally relocates into the
     // (already shared, already-wired-above) #document-settings-popover --
     // not a full-width persistent row. #back-to-public is deliberately NOT
     // relocated: it stays exactly where the markup already has it, a direct
@@ -1133,40 +1089,10 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     // directly-visible Back to Public control is mandatory, never exclusive
     // to the Document popover.
     documentSettingsBody.appendChild(roomCodeLabel);
-    documentSettingsBody.appendChild(roomBackgroundControl);
-    documentSettingsBody.appendChild(roomBackgroundColourInput);
 
     // Read-only document information -- this room's dimensions are fixed
-    // forever at creation (already shown generically above, alongside the
-    // status bar's own statusDocSize), never as an editable control inside a
-    // room. Background, unlike dimensions, CAN be changed after creation --
-    // see changeBackground below, which never touches dimensions, drawing
-    // content, or pixel ownership.
+    // forever at creation, never an editable control inside a room.
     roomCodeLabel.textContent = `Room: ${roomCode}`;
-
-    roomBackgroundSelect.value = background.kind;
-    roomBackgroundColourInput.hidden = background.kind !== "custom";
-    if (background.kind === "custom" && background.color) roomBackgroundColourInput.value = background.color;
-
-    async function changeBackground(kind, color) {
-      const resolved = resolveNewCanvasBackground(kind, color);
-      const res = await fetch(`/api/rooms/${roomCode}/background`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(resolved),
-      });
-      if (!res.ok) return; // left unchanged locally -- the select/colour input below still reflects what was actually applied
-      background = resolved;
-      applyCanvasBackground(background);
-    }
-
-    roomBackgroundSelect.addEventListener("change", () => {
-      roomBackgroundColourInput.hidden = roomBackgroundSelect.value !== "custom";
-      if (roomBackgroundSelect.value !== "custom") changeBackground(roomBackgroundSelect.value);
-    });
-    roomBackgroundColourInput.addEventListener("input", () => {
-      changeBackground("custom", roomBackgroundColourInput.value);
-    });
 
     const pidFromUrl = new URLSearchParams(location.search).get("pid");
     presenceId = pidFromUrl && pidFromUrl.length > 0 ? pidFromUrl : crypto.randomUUID();

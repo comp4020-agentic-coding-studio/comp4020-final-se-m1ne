@@ -9,7 +9,7 @@
 
    #canvas's own background is the deliberate, permanent exception, in both
    public/styles.css and public/landing.css: a literal #ffffff, never a
-   token, so there is nothing here (or in the dark override below) that could
+   token, so there is nothing here that could
    ever tint, dim, or otherwise alter the artwork itself. A pixel-art
    document's own chosen background (white/transparent-checkerboard/custom)
    is a similar, separate exception -- see public/styles.css's own
@@ -49,37 +49,4 @@
   --radius-sm: 4px;
   --radius-md: 10px;
   --mono-font: ui-monospace, "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
-}
-
-:root[data-theme="dark"] {
-  --app-bg: #231b14;
-  --workspace-bg: #2a2118;
-  --ribbon-bg: #2d2419;
-  --control-bg: #332920;
-  --control-hover-bg: #3d3223;
-  --control-active-bg: #473b28;
-  --control-disabled-bg: #2a2219;
-  --control-disabled-border: #3a2f20;
-  --selected-bg: #3a4530;
-  --selected-border: #7f9a6e;
-  --border: #3d3121;
-  --divider: #463825;
-  --text-primary: #f2e7d8;
-  --text-secondary: #c7b8a2;
-  --text-disabled: #6e5f4a;
-  --input-bg: #2a2219;
-  --input-border: #4a3c28;
-  --focus-ring: #d99a66;
-  --popover-bg: #2b241c;
-  --popover-border: #4a3c28;
-  --popover-shadow: rgba(0, 0, 0, 0.55);
-  --swatch-selected-border: #f2e7d8;
-  --canvas-outline: rgba(242, 231, 216, 0.4);
-  --canvas-surround-bg: #241c14;
-  --canvas-dot: rgba(242, 231, 216, 0.1);
-  --grid-line: rgba(217, 154, 102, 0.4);
-  --sage: #7f9a6e;
-  --sage-hover: #8fae7c;
-  --apricot: #d99a66;
-  --on-sage: #1c1812;
 }

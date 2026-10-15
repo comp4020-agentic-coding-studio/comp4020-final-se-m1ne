@@ -35,8 +35,6 @@ const privateRoomControls = document.getElementById("private-room-controls");
 const roomCodeLabel = document.getElementById("room-code-label");
 const undoButton = document.getElementById("undo-button");
 const redoButton = document.getElementById("redo-button");
-const themeToggle = document.getElementById("theme-toggle");
-const statusDocSize = document.getElementById("status-doc-size");
 const zoomOutButton = document.getElementById("zoom-out-button");
 const zoomInButton = document.getElementById("zoom-in-button");
 const zoomPercentDisplay = document.getElementById("zoom-percent");
@@ -57,33 +55,6 @@ const guestSetupConfirmButton = document.getElementById("guest-setup-confirm");
 const remoteCursorsContainer = document.getElementById("remote-cursors");
 const remoteStrokePreviewCanvas = document.getElementById("remote-stroke-preview");
 const remoteStrokePreviewCtx = remoteStrokePreviewCanvas.getContext("2d");
-
-// Theme is a local, per-page-load UI preference only -- never sent to the
-// server, never part of collaborative state (see server/db.js, untouched by
-// this), and never persisted across reloads: the inline <head> script in
-// index.html always initializes document.documentElement.dataset.theme from
-// the system's own prefers-color-scheme before this module even runs, so a
-// manual toggle here only ever affects the CURRENT page view, never a future
-// one -- a previous manual choice must never override the system default on
-// the next load. This file's own listener is the ONLY one ever attached to
-// #theme-toggle for a legacy page: public/pixel-editor.js wires an
-// equivalent copy, but only inside its own bootPixelEditor (the "pixel"
-// mode branch), which this file's import path (the "legacy" branch) never
-// reaches -- the two used to both run unconditionally, which doubled every
-// click back to no visible change at all.
-function syncThemeToggleUI() {
-  const theme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
-  themeToggle.textContent = theme === "dark" ? "Dark" : "Light";
-  themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
-  themeToggle.setAttribute("aria-label", `Toggle theme, currently ${theme}`);
-}
-
-themeToggle.addEventListener("click", () => {
-  document.documentElement.dataset.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  syncThemeToggleUI();
-});
-
-syncThemeToggleUI();
 
 // The one place "which canvas is this" is decided: a room page is served at
 // /room/CODE (server/index.js's GET /room/:code, which 404s before ever
@@ -1713,13 +1684,11 @@ window.addEventListener("keydown", (event) => {
 });
 
 initCanvasBackingStore();
-statusDocSize.textContent = `${DOCUMENT_WIDTH} × ${DOCUMENT_HEIGHT}`;
 setMode(mode);
 // Unconditional: this module is always "legacy" mode exclusively (see
 // public/pixeldoc.js's resolveEditorMode) -- it is never loaded alongside
 // public/pixel-editor.js's own copy of this same wiring (that one runs only
-// inside bootPixelEditor, the mutually exclusive "pixel" branch), so there is
-// no risk of the double-listener bug the theme toggle once had.
+// inside bootPixelEditor, the mutually exclusive "pixel" branch),.
 wireHelpPopover();
 // One-shot: runs once the workspace has a valid measured size at initial
 // load (hence the rAF, so #canvas-viewport has completed layout), and never

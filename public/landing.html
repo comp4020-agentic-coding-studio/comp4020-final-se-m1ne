@@ -4,18 +4,6 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Shared Canvas</title>
-    <!-- Same pre-paint theme-init technique as public/index.html -- applies
-         the system's own current preference before first paint, so there is
-         no flash of the wrong theme. Deliberately never reads a saved
-         choice, same reasoning as the editor's own copy (see that file's
-         comment): this page has no manual toggle of its own at all, system
-         preference is the only input. -->
-    <script>
-      (function () {
-        var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-        document.documentElement.dataset.theme = prefersDark ? "dark" : "light";
-      })();
-    </script>
     <link rel="stylesheet" href="/theme-tokens.css" />
     <link rel="stylesheet" href="/shared-ui.css" />
     <link rel="stylesheet" href="/landing.css" />
