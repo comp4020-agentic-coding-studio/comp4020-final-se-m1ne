@@ -4,6 +4,7 @@ import { initColourPicker } from "./colour-picker-ui.js";
 import { compositeOverWhite } from "./sampling.js";
 import { wireHelpPopover } from "./help-popover.js";
 import { initCursorColourPicker } from "./cursor-colour-picker.js";
+import { constrainCorner, isMeaningfulShape, paintShape } from "./shapes.js";
 import { installNavigationMarking, isNavigating, markNavigating, releasePreviousLease } from "./presence-handoff.js";
 import {
   DOCUMENT_WIDTH,
@@ -26,6 +27,13 @@ const toolSizeSlider = document.getElementById("tool-size-slider");
 const toolSizeValue = document.getElementById("tool-size-value");
 const toolBrushButton = document.getElementById("tool-brush");
 const toolEraserButton = document.getElementById("tool-eraser");
+const SHAPE_TOOL_IDS = ["line", "rectangle", "ellipse", "triangle"];
+const shapeToolButtons = Object.fromEntries(SHAPE_TOOL_IDS.map((id) => [id, document.getElementById(`tool-${id}`)]));
+const shapeModeControl = document.getElementById("shape-mode-control");
+const shapeModeButtons = {
+  outline: document.getElementById("shape-mode-outline"),
+  filled: document.getElementById("shape-mode-filled"),
+};
 const toolEyedropperButton = document.getElementById("tool-eyedropper");
 const colourGroup = document.getElementById("colour-group");
 const createRoomButton = document.getElementById("create-room-button");
@@ -141,7 +149,8 @@ let myOwnerId = null;
 let color = "#1d1d1d";
 let brushSizePx = 6;
 let eraserSizePx = 30;
-let mode = "brush"; // "brush" | "eraser" | "eyedropper"
+let mode = "brush"; // "brush" | "eraser" | "eyedropper" | "line" | "rectangle" | "ellipse" | "triangle"
+let shapeMode = "outline"; // "outline" | "filled" -- shared by rectangle/ellipse/triangle; Line has no mode
 
 // One shared slider's meaning depends on which tool is active: each entry
 // owns its own range (matching the two permanent sliders' old min/max/step
@@ -165,6 +174,9 @@ const toolSizes = {
     set: (px) => { eraserSizePx = px; },
   },
 };
+// Every shape tool uses the Brush size as its stroke width -- the same
+// variable and range, so switching Brush <-> a shape never changes the number.
+for (const id of ["line", "rectangle", "ellipse", "triangle"]) toolSizes[id] = toolSizes.brush;
 
 // Applies the active tool's own range and current value to the one shared
 // slider -- called on every tool switch so min/max/value/display all update
@@ -276,7 +288,18 @@ function ensureScratch() {
 // Shared by full replay (every historical op) and the live in-progress
 // gesture (just its newest delta), so there is exactly one rendering code
 // path for both draw and erase, in every situation.
-function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points) {
+function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points, shape) {
+  if (shape && points.length === 2) {
+    // A shape op: two document-normalised corners + {type, mode}. paintShape
+    // is the same code the live preview and remote replay run.
+    paintShape(
+      layerCtx,
+      { type: shape.type, mode: shape.mode, color, lineWidth: brushSizeToDocumentPx(sizeNormalized, DOCUMENT_WIDTH) },
+      toPixels(points[0]),
+      toPixels(points[1]),
+    );
+    return;
+  }
   if (points.length === 0) return;
   const pixels = points.map(toPixels);
 
@@ -304,7 +327,7 @@ function rebuildLayerFromOps(ownerId) {
   layer.canvas.width = canvas.width;
   layer.canvas.height = canvas.height;
   const ops = opsByOwner.get(ownerId) ?? [];
-  for (const op of ops) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points);
+  for (const op of ops) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape);
 }
 
 function rebuildAllLayers() {
@@ -316,7 +339,7 @@ function rebuildAllLayers() {
     // a resize mid-persist would drop a pending gesture from the owner's own
     // mask, and once persistence did land it'd render clipped away to
     // nothing on the very next ops-driven repaint.
-    for (const op of pendingOps) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points);
+    for (const op of pendingOps) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape);
     if (current) {
       renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, current.points);
       currentLastRenderedIndex = current.points.length - 1;
@@ -331,6 +354,16 @@ function rebuildAllLayers() {
 // that produced them don't change; only the pixel conversion below depends
 // on the current canvas size.
 function opNormalizedBounds(op) {
+  if (!op._normBounds && op.shape && op.points.length === 2) {
+    const [p, q] = op.points;
+    const pad = op.size / 2 + 2 / canvas.width;
+    op._normBounds = {
+      minX: Math.min(p.x, q.x) - pad,
+      minY: Math.min(p.y, q.y) - pad,
+      maxX: Math.max(p.x, q.x) + pad,
+      maxY: Math.max(p.y, q.y) + pad,
+    };
+  }
   if (!op._normBounds) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const p of op.points) {
@@ -403,7 +436,7 @@ function repaintVisibleCanvas(region) {
     if (!ownerLayer) continue;
     scratchCtx.clearRect(rx, ry, rw, rh);
     scratchCtx.globalAlpha = opacity;
-    renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points);
+    renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points, op.shape);
     scratchCtx.globalAlpha = 1;
     scratchCtx.globalCompositeOperation = "destination-in";
     // If this op's owner has a remote erase gesture in progress right now,
@@ -428,7 +461,7 @@ function repaintVisibleCanvas(region) {
     // stacking the eventual allOps-driven replay will show once persistence
     // catches up, with nothing here waiting on it.
     for (const op of pendingOps) {
-      renderPathOnLayer(ctx, "draw", op.color, op.size, op.points);
+      renderPathOnLayer(ctx, "draw", op.color, op.size, op.points, op.shape);
     }
     if (current && current.kind === "draw") {
       renderPathOnLayer(ctx, "draw", current.color, current.size, current.points);
@@ -733,6 +766,7 @@ async function sendStrokePreview(force) {
         color: current.color,
         size: current.size,
         points: current.points,
+        ...(current.shape ? { shape: current.shape } : {}),
       }),
     });
   } catch {
@@ -872,7 +906,7 @@ function repaintRemoteStrokePreviews() {
   remoteStrokePreviewCtx.clearRect(0, 0, remoteStrokePreviewCanvas.width, remoteStrokePreviewCanvas.height);
   for (const preview of remoteStrokePreviews.values()) {
     if (preview.kind === "erase") continue; // rendered directly into the visible canvas instead -- see erasePreviewLayerFor
-    renderPathOnLayer(remoteStrokePreviewCtx, "draw", preview.color, preview.size, preview.points);
+    renderPathOnLayer(remoteStrokePreviewCtx, "draw", preview.color, preview.size, preview.points, preview.shape);
   }
 }
 
@@ -952,6 +986,7 @@ function handleRemoteStrokeEvent(data) {
   preview.color = data.color;
   preview.size = data.size;
   preview.points = data.points;
+  preview.shape = data.shape;
   preview.lastSeen = Date.now();
   if (data.kind === "erase") {
     updateErasePreviewLayer(data.ownerId, preview);
@@ -1089,8 +1124,72 @@ function beginGesture(kind, point) {
 
 function appendToGesture(points) {
   if (!current) return;
+  if (current.shape) return; // a shape gesture is driven by updateShapeGesture, never by appended freehand points
   current.points.push(...points);
   queueFrame();
+}
+
+// --- Shape gestures (Line / Rectangle / Ellipse / Triangle) -------------------
+// A shape gesture reuses `current` so Undo/Redo guards, pending-op bookkeeping,
+// persistence and the realtime "op" broadcast all work exactly as for a brush
+// stroke. Its `points` is always [anchor, end] (document-normalised), where
+// `end` is recomputed from the anchor, the raw pointer and the CURRENT Shift
+// state on every change -- so the preview, the committed op and a remote
+// replay all come from the single constrainCorner/paintShape geometry in
+// shapes.js. While dragging, the shape is painted ONLY on the preview overlay
+// (never on the real canvas or the owner's layer), so cancelling it can leave
+// no trace; pointer-up is what commits it.
+let shapeRawPointer = null; // latest raw pointer position (document-normalised) of the active shape drag
+let shapeShift = false; // Shift state, kept live by pointermove/keydown/keyup
+
+function shapeEnd(type, anchorNorm, pointerNorm, shift) {
+  // Constrain in document PIXELS (the aspect-correct space) and convert back,
+  // so square/circle/equilateral are true on the 1920x1080 document and not
+  // merely equal in the normalised, non-square [0,1] space.
+  const a = toPixels(anchorNorm);
+  const p = toPixels(pointerNorm);
+  const end = constrainCorner(type, a, p, shift);
+  return { x: end.x / DOCUMENT_WIDTH, y: end.y / DOCUMENT_HEIGHT };
+}
+
+function beginShapeGesture(type, point) {
+  if (myOwnerId === null) return;
+  current = {
+    kind: "draw",
+    color,
+    size: brushSizePx / canvas.width,
+    points: [point, point],
+    shape: type === "line" ? { type } : { type, mode: shapeMode },
+  };
+  shapeRawPointer = point;
+  currentLastRenderedIndex = 0;
+  paintShapePreview();
+  updateUndoRedoButtons();
+}
+
+function updateShapeGesture() {
+  if (!current || !current.shape || shapeRawPointer === null) return;
+  current.points = [current.points[0], shapeEnd(current.shape.type, current.points[0], shapeRawPointer, shapeShift)];
+  paintShapePreview();
+  sendStrokePreview(false);
+}
+
+function paintShapePreview() {
+  repaintRemoteStrokePreviews();
+  if (!current || !current.shape) return;
+  renderPathOnLayer(remoteStrokePreviewCtx, "draw", current.color, current.size, current.points, current.shape);
+}
+
+// Drops an unfinished shape without saving, broadcasting an op, or leaving any
+// pixels behind (the preview overlay is simply repainted without it).
+function cancelShapeGesture() {
+  if (!current || !current.shape) return;
+  cancelFrame();
+  current = null;
+  shapeRawPointer = null;
+  repaintRemoteStrokePreviews();
+  endStrokePreview();
+  updateUndoRedoButtons();
 }
 
 async function persistGesture(finished) {
@@ -1098,7 +1197,12 @@ async function persistGesture(finished) {
   const body =
     finished.kind === "erase"
       ? { radius: finished.size / 2, points: finished.points }
-      : { color: finished.color, width: finished.size, points: finished.points };
+      : {
+          color: finished.color,
+          width: finished.size,
+          points: finished.points,
+          ...(finished.shape ? { shape: finished.shape } : {}),
+        };
 
   try {
     const res = await fetch(endpoint, {
@@ -1117,6 +1221,7 @@ async function persistGesture(finished) {
       size: finished.size,
       points: finished.points,
       createdAt: saved.createdAt,
+      ...(finished.shape ? { shape: finished.shape } : {}),
     };
     // Appended at the end: with no live multi-user sync yet, nothing else
     // locally inserts an op into allOps mid-session, so this is always the
@@ -1150,6 +1255,27 @@ async function persistGesture(finished) {
 
 function endGesture() {
   if (!current) return;
+  if (current.shape) {
+    const [a, b] = current.points;
+    if (!isMeaningfulShape(current.shape.type, toPixels(a), toPixels(b))) {
+      cancelShapeGesture(); // a click (or a degenerate drag) must not create an accidental shape
+      return;
+    }
+    // Commit: paint onto the owner's own layer (so erasing and replay agree)
+    // and the visible canvas, then hand off to the normal persist path.
+    const layer = ensureLayer(myOwnerId);
+    renderPathOnLayer(layer.ctx, "draw", current.color, current.size, current.points, current.shape);
+    renderPathOnLayer(ctx, "draw", current.color, current.size, current.points, current.shape);
+    const finishedShape = current;
+    current = null;
+    shapeRawPointer = null;
+    repaintRemoteStrokePreviews();
+    endStrokePreview();
+    pendingOps.push(finishedShape);
+    updateUndoRedoButtons();
+    persistGesture(finishedShape);
+    return;
+  }
   cancelFrame();
   renderCurrentDelta(); // flush any points accumulated since the last rendered frame
   // One final, forced (non-throttled) preview send with the now-complete
@@ -1291,6 +1417,11 @@ canvas.addEventListener("pointerdown", (event) => {
     return;
   }
   canvas.setPointerCapture(event.pointerId);
+  if (shapeToolButtons[mode]) {
+    shapeShift = event.shiftKey;
+    beginShapeGesture(mode, pointerPos(event));
+    return;
+  }
   beginGesture(mode === "eraser" ? "erase" : "draw", pointerPos(event));
 });
 
@@ -1304,6 +1435,12 @@ canvas.addEventListener("pointermove", (event) => {
     return;
   }
   if (!current) return;
+  if (current.shape) {
+    shapeShift = event.shiftKey;
+    shapeRawPointer = pointerPos(event);
+    updateShapeGesture();
+    return;
+  }
   appendToGesture(coalescedPositions(event));
 });
 
@@ -1314,8 +1451,44 @@ function endPointerAction(event) {
   }
   endGesture();
 }
-canvas.addEventListener("pointerup", endPointerAction);
-canvas.addEventListener("pointercancel", endPointerAction);
+canvas.addEventListener("pointerup", (event) => {
+  if (current && current.shape) {
+    // Recompute the final geometry from the Shift state at release.
+    shapeShift = event.shiftKey;
+    shapeRawPointer = pointerPos(event);
+    updateShapeGesture();
+  }
+  endPointerAction(event);
+});
+canvas.addEventListener("pointercancel", (event) => {
+  if (current && current.shape) {
+    cancelShapeGesture(); // an interrupted shape drag is dropped, never committed
+    return;
+  }
+  endPointerAction(event);
+});
+canvas.addEventListener("lostpointercapture", () => {
+  if (current && current.shape) cancelShapeGesture();
+});
+
+// Shift pressed or released mid-drag updates the preview immediately, without
+// the pointer having to move. Escape cancels an unfinished shape.
+window.addEventListener("keydown", (event) => {
+  if (!current || !current.shape) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    cancelShapeGesture();
+  } else if (event.key === "Shift" && !shapeShift) {
+    shapeShift = true;
+    updateShapeGesture();
+  }
+});
+window.addEventListener("keyup", (event) => {
+  if (event.key === "Shift" && current && current.shape && shapeShift) {
+    shapeShift = false;
+    updateShapeGesture();
+  }
+});
 
 // Preset swatches + the integrated Hue-ring/SV-square wheel + RGB/HSV
 // sliders: the established custom-colour interaction, extracted unchanged
@@ -1338,9 +1511,16 @@ toolSizeSlider.addEventListener("input", () => {
 });
 
 function setMode(newMode) {
+  if (current && current.shape) cancelShapeGesture(); // switching tools mid-shape drops the preview
   mode = newMode;
   toolBrushButton.classList.toggle("selected", mode === "brush");
   toolEraserButton.classList.toggle("selected", mode === "eraser");
+  for (const id of SHAPE_TOOL_IDS) {
+    shapeToolButtons[id].classList.toggle("selected", mode === id);
+    shapeToolButtons[id].setAttribute("aria-pressed", String(mode === id));
+  }
+  // The one Outline/Filled selector shows only for the three closed shapes.
+  shapeModeControl.hidden = !(mode === "rectangle" || mode === "ellipse" || mode === "triangle");
   toolEyedropperButton.classList.toggle("selected", mode === "eyedropper");
   toolBrushButton.setAttribute("aria-pressed", String(mode === "brush"));
   toolEraserButton.setAttribute("aria-pressed", String(mode === "eraser"));
@@ -1348,8 +1528,10 @@ function setMode(newMode) {
   // Eyedropper has no on-canvas diameter to preview, so it gets a plain
   // native crosshair instead of the circular size-preview overlay Brush/
   // Eraser use (replaced by that overlay via updateCursorSize below).
-  canvas.style.cursor = mode === "eyedropper" ? "crosshair" : "none";
-  if (mode === "eyedropper") toolCursor.style.display = "none";
+  // Eyedropper and the shape tools have no circular brush footprint to preview.
+  const crosshairTool = mode === "eyedropper" || Boolean(shapeToolButtons[mode]);
+  canvas.style.cursor = crosshairTool ? "crosshair" : "none";
+  if (crosshairTool) toolCursor.style.display = "none";
   syncSizeControlToMode();
   updateCursorSize();
   // Colour doesn't apply to the Eraser, but stays editable while it's active
@@ -1361,6 +1543,17 @@ function setMode(newMode) {
 
 toolBrushButton.addEventListener("click", () => setMode("brush"));
 toolEraserButton.addEventListener("click", () => setMode("eraser"));
+for (const id of SHAPE_TOOL_IDS) shapeToolButtons[id].addEventListener("click", () => setMode(id));
+
+function setShapeMode(next) {
+  shapeMode = next;
+  for (const [key, button] of Object.entries(shapeModeButtons)) {
+    button.classList.toggle("selected", key === next);
+    button.setAttribute("aria-pressed", String(key === next));
+  }
+}
+shapeModeButtons.outline.addEventListener("click", () => setShapeMode("outline"));
+shapeModeButtons.filled.addEventListener("click", () => setShapeMode("filled"));
 toolEyedropperButton.addEventListener("click", () => setMode("eyedropper"));
 
 // A circular outline tracking the pointer, sized to the tool's actual
@@ -1378,7 +1571,7 @@ function currentToolDiameterPx() {
 }
 
 function updateCursorSize() {
-  if (mode === "eyedropper") return; // no diameter to preview -- see setMode's native crosshair instead
+  if (mode === "eyedropper" || shapeToolButtons[mode]) return; // no diameter to preview -- see setMode's native crosshair instead
   const diameter = cursorDiameterCssPx(currentToolDiameterPx(), zoom);
   toolCursor.style.width = `${diameter}px`;
   toolCursor.style.height = `${diameter}px`;
@@ -1433,7 +1626,7 @@ zoomOutButton.addEventListener("click", () => applyZoom(stepZoom(zoom, ZOOM_LEVE
 fitButton.addEventListener("click", applyFit);
 
 canvas.addEventListener("pointerenter", (event) => {
-  if (mode === "eyedropper") return; // crosshair only, no circular overlay
+  if (mode === "eyedropper" || shapeToolButtons[mode]) return; // crosshair only, no circular overlay
   updateCursorSize();
   toolCursor.style.left = `${event.clientX}px`;
   toolCursor.style.top = `${event.clientY}px`;

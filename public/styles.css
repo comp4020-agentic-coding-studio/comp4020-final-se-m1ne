@@ -1285,11 +1285,36 @@ body {
   font-size: 0.85rem;
 }
 
+/* Brush size on the left; the Outline/Filled selector (shape tools only) sits
+   beside it, so the zoom group stays at the opposite end of the same row. */
+#tool-settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
 .size-control {
   display: flex;
   align-items: center;
   gap: 10px;
   white-space: nowrap;
+}
+
+.shape-mode-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shape-mode-control[hidden] {
+  display: none;
+}
+
+#workspace .shape-mode-control .app-button.selected { /* #workspace prefix: must outrank '#workspace .app-button' */
+  background: var(--selected-tool-bg);
+  border-color: var(--workspace-accent);
+  color: var(--workspace-accent-text);
 }
 
 .size-label {

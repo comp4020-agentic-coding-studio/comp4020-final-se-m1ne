@@ -91,6 +91,9 @@ function makeStubContext() {
     fillRect: vi.fn(),
     setTransform: vi.fn(),
     arc: vi.fn(),
+    rect: vi.fn(),
+    ellipse: vi.fn(),
+    closePath: vi.fn(),
     fill: vi.fn(),
     createLinearGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
     getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(4) })),
@@ -106,17 +109,46 @@ function makeStubContext() {
   };
 }
 
+// Wraps a stub context so every globalCompositeOperation / globalAlpha write is
+// recorded. The scratch canvas is the only one that ever sets "destination-in"
+// (it clips each op against its owner's mask), and it is also where the Public
+// fade opacity is applied, so recording both lets a test observe exactly what
+// opacity an op was painted with.
+export function recordStyleWrites<T extends ReturnType<typeof makeStubContext>>(stub: T) {
+  const alphas: number[] = [];
+  const composites: string[] = [];
+  let alpha = stub.globalAlpha;
+  let composite = stub.globalCompositeOperation;
+  Object.defineProperty(stub, "globalAlpha", {
+    get: () => alpha,
+    set: (v: number) => { alpha = v; alphas.push(v); },
+  });
+  Object.defineProperty(stub, "globalCompositeOperation", {
+    get: () => composite,
+    set: (v: string) => { composite = v; composites.push(v); },
+  });
+  return Object.assign(stub, { alphaWrites: alphas, compositeWrites: composites });
+}
+
 // element id -> the stub context returned for it (only elements that have an
 // id are tracked; the dynamically-created per-owner layer/scratch canvases
 // never need individual inspection from a test, only #canvas and
 // #remote-stroke-preview do).
 export const canvasContexts = new Map<string, ReturnType<typeof makeStubContext>>();
 
+// Every context the stub handed out since the last installCanvasStub(), id-less
+// layer/scratch canvases included, in creation order -- for tests that need to
+// know whether SOMETHING painted (e.g. a shape rendered onto a layer or the
+// scratch canvas before being composited onto #canvas).
+export const allCanvasContexts: Array<ReturnType<typeof makeStubContext>> = [];
+
 export function installCanvasStub() {
   canvasContexts.clear();
+  allCanvasContexts.length = 0;
   HTMLCanvasElement.prototype.getContext = vi.fn(function (this: HTMLCanvasElement) {
-    const stub = makeStubContext();
+    const stub = recordStyleWrites(makeStubContext());
     if (this.id) canvasContexts.set(this.id, stub);
+    allCanvasContexts.push(stub);
     return stub;
   }) as unknown as typeof HTMLCanvasElement.prototype.getContext;
   HTMLCanvasElement.prototype.setPointerCapture = HTMLCanvasElement.prototype.setPointerCapture ?? (() => {});
@@ -148,6 +180,7 @@ export function installFetchMock(posted: PostedRequest[]) {
             points: body.points,
             createdAt: Date.now(),
             seq: posted.length,
+            ...(body.shape ? { shape: body.shape } : {}),
           },
           201,
         );

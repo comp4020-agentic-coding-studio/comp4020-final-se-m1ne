@@ -22,6 +22,7 @@
 // editor's own DOM/event wiring.
 import { DOCUMENT_WIDTH, DOCUMENT_HEIGHT, documentPointToPixel, brushSizeToDocumentPx } from "./viewport.js";
 import { effectiveOpacity } from "./fade.js";
+import { paintShape } from "./shapes.js";
 
 function toPixels(point) {
   return documentPointToPixel(point, DOCUMENT_WIDTH, DOCUMENT_HEIGHT);
@@ -31,7 +32,16 @@ function toPixels(point) {
 // composite modes, same round caps, same single-point-tap special case --
 // kept in lockstep deliberately, so this preview can never visibly diverge
 // from how the same op renders in the real, interactive editor.
-function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points) {
+function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points, shape) {
+  if (shape && points.length === 2) {
+    paintShape(
+      layerCtx,
+      { type: shape.type, mode: shape.mode, color, lineWidth: brushSizeToDocumentPx(sizeNormalized, DOCUMENT_WIDTH) },
+      toPixels(points[0]),
+      toPixels(points[1]),
+    );
+    return;
+  }
   if (points.length === 0) return;
   const pixels = points.map(toPixels);
   layerCtx.save();
@@ -100,7 +110,7 @@ export function createPublicCanvasRenderer(canvas) {
     layers = new Map();
     for (const [ownerId, ops] of groupByOwner(allOps)) {
       const layer = ensureLayer(ownerId);
-      for (const op of ops) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points);
+      for (const op of ops) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape);
     }
   }
 
@@ -122,7 +132,7 @@ export function createPublicCanvasRenderer(canvas) {
       if (!ownerLayer) continue;
       scratchCtx.clearRect(0, 0, canvas.width, canvas.height);
       scratchCtx.globalAlpha = opacity;
-      renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points);
+      renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points, op.shape);
       scratchCtx.globalAlpha = 1;
       scratchCtx.globalCompositeOperation = "destination-in";
       scratchCtx.drawImage(ownerLayer.canvas, 0, 0);
@@ -152,7 +162,7 @@ export function createPublicCanvasRenderer(canvas) {
     allOps.push(op);
     allOps.sort(bySeq);
     const layer = ensureLayer(op.ownerId);
-    renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points);
+    renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape);
     repaint();
   }
 
@@ -166,7 +176,7 @@ export function createPublicCanvasRenderer(canvas) {
     const layer = ensureLayer(op.ownerId);
     layer.ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
     const remaining = allOps.filter((existing) => existing.ownerId === op.ownerId);
-    for (const existing of remaining) renderPathOnLayer(layer.ctx, existing.kind, existing.color, existing.size, existing.points);
+    for (const existing of remaining) renderPathOnLayer(layer.ctx, existing.kind, existing.color, existing.size, existing.points, existing.shape);
     repaint();
   }
 

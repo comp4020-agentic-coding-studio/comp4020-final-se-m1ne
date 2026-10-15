@@ -96,6 +96,15 @@ if (!columnExists("ops", "doc_kind")) {
   db.exec("ALTER TABLE ops ADD COLUMN doc_kind TEXT NOT NULL DEFAULT 'freehand'");
 }
 
+// Shape tools (Line/Rectangle/Ellipse/Triangle): a shape is an ordinary
+// 'draw' op (the kind CHECK above cannot be altered in place on an existing
+// database) carrying this extra JSON, {"type": ..., "mode": ...}, with its two
+// defining corner points in `points`. NULL for every brush/erase op, including
+// every row that predates this column, so existing artwork replays unchanged.
+if (!columnExists("ops", "shape")) {
+  db.exec("ALTER TABLE ops ADD COLUMN shape TEXT");
+}
+
 // A room is just its code plus when it was created -- no name, owner,
 // membership, or settings: nothing this slice needs. A room's existence here
 // is also what lets "is this a real room?" be answered before ever touching
@@ -240,7 +249,7 @@ export const STALE_TIMEOUT_MS = 90_000;
 export const ROOM_EMPTY_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 const insertOpStmt = db.prepare(
-  "INSERT INTO ops (id, owner_id, kind, color, size, points, created_at, room_id, doc_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "INSERT INTO ops (id, owner_id, kind, color, size, points, created_at, room_id, doc_kind, shape) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 );
 
 // width/height are NULL for a legacy freehand room (the default every
@@ -334,7 +343,7 @@ function migrateLegacyStrokesIfPresent() {
   db.exec("BEGIN");
   try {
     for (const row of legacyRows) {
-      insertOpStmt.run(row.id, row.owner_id, "draw", row.color, row.width, row.points, row.created_at, null, "freehand");
+      insertOpStmt.run(row.id, row.owner_id, "draw", row.color, row.width, row.points, row.created_at, null, "freehand", null);
     }
     db.exec("DROP TABLE strokes");
     db.exec("COMMIT");
@@ -358,6 +367,7 @@ function rowToOp(row) {
     createdAt: row.created_at,
     roomId: row.room_id,
     docKind: row.doc_kind,
+    ...(row.shape ? { shape: JSON.parse(row.shape) } : {}),
   };
 }
 
@@ -368,9 +378,10 @@ function rowToOp(row) {
 // existing caller (the freehand draw/erase routes, and every direct-db.js
 // test predating this step) keeps inserting exactly what it always has --
 // only the new pixel routes (server/index.js) ever pass "pixel" explicitly.
-export function insertOp({ id, ownerId, kind, color, size, points, createdAt, roomId = null, docKind = "freehand" }) {
+export function insertOp({ id, ownerId, kind, color, size, points, createdAt, roomId = null, docKind = "freehand", shape = null }) {
   const info = insertOpStmt.run(
     id, ownerId, kind, color ?? null, size, JSON.stringify(points), createdAt, roomId, docKind,
+    shape ? JSON.stringify(shape) : null,
   );
   return Number(info.lastInsertRowid);
 }
@@ -392,14 +403,14 @@ export function insertOp({ id, ownerId, kind, color, size, points, createdAt, ro
 export function listOps(roomId = null, docKind = "freehand") {
   const rows = db
     .prepare(
-      "SELECT seq, id, owner_id, kind, color, size, points, created_at, room_id, doc_kind " +
+      "SELECT seq, id, owner_id, kind, color, size, points, created_at, room_id, doc_kind, shape " +
         "FROM ops WHERE room_id IS ? AND doc_kind = ? AND active = 1 ORDER BY seq ASC",
     )
     .all(roomId, docKind);
   return rows.map(rowToOp);
 }
 
-const OP_COLUMNS = "seq, id, owner_id, kind, color, size, points, created_at, room_id, doc_kind";
+const OP_COLUMNS = "seq, id, owner_id, kind, color, size, points, created_at, room_id, doc_kind, shape";
 
 // `room_id IS ?` (not `=`), exactly like listOps above: a null roomId (the
 // Public scope) must match rows where room_id is actually NULL, and `=`

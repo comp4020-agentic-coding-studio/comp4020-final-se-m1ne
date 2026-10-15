@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getOrSetAnonId, readAnonId } from "./anon.js";
+import { isValidShapeDescriptor } from "../public/shapes.js";
 import {
   abandonRedoBranch,
   countOnlineNow,
@@ -182,6 +183,21 @@ function pointsValid(points) {
   return Array.isArray(points) && points.length > 0 && points.every(isPoint);
 }
 
+// A shape op (Line/Rectangle/Ellipse/Triangle) is a draw op with a `shape`
+// descriptor and exactly its two defining corners (anchor, then the final,
+// already-constrained opposite corner), as finite normalized coordinates in a
+// generous range. Returns the normalised descriptor, or null if invalid.
+const SHAPE_COORD_LIMIT = 4; // normalized units; the document is [0,1], a drag may overshoot a little but not absurdly
+function normalizeShape(shape, points) {
+  if (!isValidShapeDescriptor(shape)) return null;
+  if (!Array.isArray(points) || points.length !== 2) return null;
+  for (const p of points) {
+    if (!isPoint(p) || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+    if (Math.abs(p.x) > SHAPE_COORD_LIMIT || Math.abs(p.y) > SHAPE_COORD_LIMIT) return null;
+  }
+  return shape.type === "line" ? { type: "line" } : { type: shape.type, mode: shape.mode };
+}
+
 // Persists one brush gesture as a single append-only op. ownerId always
 // comes from getOrSetAnonId (the httpOnly cookie), never from the request
 // body -- there is no ownerId field in the body at all, so there is nothing
@@ -190,7 +206,7 @@ function pointsValid(points) {
 // route (never the request body either), never from anything a client could
 // supply directly.
 function handleDraw(req, res, roomId) {
-  const { color, width, points } = req.body ?? {};
+  const { color, width, points, shape } = req.body ?? {};
   const widthValid = typeof width === "number" && Number.isFinite(width) && width > 0;
 
   if (typeof color !== "string" || !widthValid || !pointsValid(points)) {
@@ -198,6 +214,16 @@ function handleDraw(req, res, roomId) {
       .status(400)
       .json({ error: "a draw op needs a color, a positive width, and at least one {x, y} point" });
     return;
+  }
+  let normalizedShape = null;
+  if (shape !== undefined) {
+    normalizedShape = normalizeShape(shape, points);
+    if (!normalizedShape || !isValidHexColor(color)) {
+      res.status(400).json({
+        error: "a shape op needs a supported type (line/rectangle/ellipse/triangle), mode outline|filled, a #rrggbb color and exactly two finite corner points",
+      });
+      return;
+    }
   }
 
   const op = {
@@ -210,6 +236,7 @@ function handleDraw(req, res, roomId) {
     createdAt: Date.now(),
     roomId,
     docKind: "freehand",
+    ...(normalizedShape ? { shape: normalizedShape } : {}),
   };
   const seq = insertOp(op);
   // A fresh edit abandons this owner's own remaining redo branch in this
@@ -672,10 +699,18 @@ function handleFreehandStrokePreview(req, res, roomId) {
     return;
   }
 
-  const { kind, color, size, points } = req.body ?? {};
+  const { kind, color, size, points, shape } = req.body ?? {};
   if (kind !== "draw" && kind !== "erase") {
     res.status(400).json({ error: "kind must be 'draw' or 'erase'" });
     return;
+  }
+  let previewShape = null;
+  if (shape !== undefined) {
+    previewShape = kind === "draw" ? normalizeShape(shape, points) : null;
+    if (!previewShape) {
+      res.status(400).json({ error: "a shape preview needs a draw kind, a supported shape and exactly two finite corner points" });
+      return;
+    }
   }
   if (kind === "draw" && typeof color !== "string") {
     res.status(400).json({ error: "a draw preview needs a color" });
@@ -699,6 +734,7 @@ function handleFreehandStrokePreview(req, res, roomId) {
     color: kind === "erase" ? null : color,
     size,
     points,
+    ...(previewShape ? { shape: previewShape } : {}),
   });
   res.status(200).json({ ok: true });
 }

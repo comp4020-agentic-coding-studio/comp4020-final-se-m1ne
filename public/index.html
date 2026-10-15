@@ -108,6 +108,26 @@
                 </g>
               </svg>
             </button>
+            <button id="tool-line" class="tool-button" aria-pressed="false" aria-label="Line" title="Line">
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+                <line x1="5" y1="19" x2="19" y2="5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+            <button id="tool-rectangle" class="tool-button" aria-pressed="false" aria-label="Rectangle" title="Rectangle">
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+                <rect x="4" y="6" width="16" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+            <button id="tool-ellipse" class="tool-button" aria-pressed="false" aria-label="Ellipse" title="Ellipse">
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+                <ellipse cx="12" cy="12" rx="8.5" ry="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+            <button id="tool-triangle" class="tool-button" aria-pressed="false" aria-label="Triangle" title="Triangle">
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+                <path d="M12 5 L20 19 L4 19 Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
           </div>
         </div>
 
@@ -170,6 +190,7 @@
           </div>
 
           <div id="status-bar">
+            <div id="tool-settings">
             <div class="size-control">
               <label for="tool-size-slider" class="size-label">Brush size</label>
               <input type="range" id="tool-size-slider" min="1" max="100" value="6" step="1" />
@@ -188,6 +209,11 @@
                 aria-label="Brush size in pixels"
                 hidden
               />
+            </div>
+            <div id="shape-mode-control" class="shape-mode-control" role="group" aria-label="Shape fill mode" hidden>
+              <button id="shape-mode-outline" type="button" class="app-button selected" aria-pressed="true">Outline</button>
+              <button id="shape-mode-filled" type="button" class="app-button" aria-pressed="false">Filled</button>
+            </div>
             </div>
           <div id="zoom-controls">
             <button id="zoom-out-button" type="button" class="app-button icon-button" aria-label="Zoom out" title="Zoom out">
