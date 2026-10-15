@@ -185,6 +185,46 @@ db.exec(`
   )
 `);
 
+// "Total Visitors": one row per distinct guest identity (owner_id) EVER
+// recorded, ever -- a monotonic historical count, completely independent of
+// `presence` above (which rows get deleted constantly: reconcileRoom prunes
+// stale/all rows for a room, recordPublicHeartbeat prunes Public's own
+// stale rows). Recording here (see recordVisitorIdentity below) is an
+// INSERT OR IGNORE keyed on owner_id alone, so a second, third, or
+// thousandth heartbeat/room-join/page-view from the same already-known
+// owner_id is always a no-op -- refreshing, opening another tab, or
+// switching rooms can never increase this count, only a genuinely new
+// owner_id ever can. A real SQLite table (the same DB_PATH every other table
+// here uses), so it survives a server restart or redeploy exactly like
+// `ops`/`rooms`/`guests` already do.
+const visitorIdentitiesTableIsNew = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'visitor_identities'").get() === undefined;
+db.exec(`
+  CREATE TABLE IF NOT EXISTS visitor_identities (
+    owner_id TEXT PRIMARY KEY,
+    first_seen INTEGER NOT NULL
+  )
+`);
+// One-time backfill, only the very first time this table is created (never
+// re-run on a later boot, so it can never re-import anything already
+// correctly tracked): best-effort recovery of every distinct owner_id this
+// database already has evidence of, from whichever existing tables still
+// have it -- `presence` (rows get pruned over time, so this is necessarily
+// incomplete on its own) unioned with `guests` (a nickname/cursor-colour
+// profile, never deleted, so it's durable evidence a guest existed even
+// after their presence rows are long gone). first_seen for a backfilled row
+// is simply "now" (this migration's own run time) -- the true original
+// first-seen instant was never recorded before this table existed, so there
+// is nothing more accurate to put here.
+if (visitorIdentitiesTableIsNew) {
+  const backfillNow = Date.now();
+  db.prepare(
+    `INSERT OR IGNORE INTO visitor_identities (owner_id, first_seen)
+     SELECT owner_id, ? FROM presence
+     UNION
+     SELECT owner_id, ? FROM guests`,
+  ).run(backfillNow, backfillNow);
+}
+
 // Additive, idempotent, like every other migration in this file. NULL means
 // this owner has never chosen a cursor colour -- the caller (server/
 // index.js's cursor handlers) falls back to the existing deterministic
@@ -232,6 +272,44 @@ const deleteStalePresenceStmt = db.prepare("DELETE FROM presence WHERE room_id =
 const deleteAllPresenceForRoomStmt = db.prepare("DELETE FROM presence WHERE room_id = ?");
 const deleteOnePresenceStmt = db.prepare("DELETE FROM presence WHERE room_id = ? AND presence_id = ?");
 const deleteOpsForRoomStmt = db.prepare("DELETE FROM ops WHERE room_id = ?");
+
+const insertVisitorIdentityStmt = db.prepare("INSERT OR IGNORE INTO visitor_identities (owner_id, first_seen) VALUES (?, ?)");
+const countVisitorIdentitiesStmt = db.prepare("SELECT COUNT(*) AS n FROM visitor_identities");
+// No room_id filter at all -- "Online Now" is a single, site-wide number
+// (Public Canvas, every Private Room, and the landing page's own presence,
+// all sharing this one `presence` table under their own distinct room_id
+// scopes). DISTINCT owner_id is what makes two tabs -- or a tab on the
+// landing page and another in a Private Room -- belonging to the same guest
+// count once, not twice.
+const countOnlineNowStmt = db.prepare("SELECT COUNT(DISTINCT owner_id) AS n FROM presence WHERE last_seen >= ?");
+
+// Records that this owner_id has now been observed being actively present
+// somewhere on the site -- called from every code path that ever writes a
+// presence row (createRoom, recordHeartbeat, recordPublicHeartbeat below),
+// so any guest who is ever counted in "Online Now" is, by construction,
+// also captured here at least once. INSERT OR IGNORE is what makes this
+// safe to call unconditionally on every single heartbeat: a second call for
+// an already-known owner_id is a guaranteed no-op, never a duplicate row,
+// never a bumped first_seen.
+function recordVisitorIdentity(ownerId, now = Date.now()) {
+  insertVisitorIdentityStmt.run(ownerId, now);
+}
+
+// "Total Visitors": distinct guest identities ever recorded, full stop --
+// never decreases (there is no delete path for this table at all), entirely
+// unaffected by presence rows being pruned, a room expiring, or a guest's
+// tabs all going stale. Survives a server restart/redeploy because this is
+// a real row in the same on-disk SQLite file every other table lives in.
+export function countTotalVisitors() {
+  return countVisitorIdentitiesStmt.get().n;
+}
+
+// The one site-wide "Online Now" definition: how many DISTINCT guest
+// identities currently have at least one live (non-stale) presence lease,
+// anywhere -- Public Canvas, the landing page, or any Private Room alike.
+export function countOnlineNow(now = Date.now()) {
+  return countOnlineNowStmt.get(now - STALE_TIMEOUT_MS).n;
+}
 
 // One-time, idempotent: if an old `strokes` table (the pre-migration
 // vector-fragment model) is still present, every row in it is carried
@@ -556,6 +634,7 @@ export function createRoom(
     try {
       insertRoomStmt.run(code, now, width, height, backgroundKind, backgroundColor);
       upsertPresenceStmt.run(code, presenceId, ownerId, now);
+      recordVisitorIdentity(ownerId, now);
       db.exec("COMMIT");
       return code;
     } catch (err) {
@@ -591,6 +670,7 @@ export function recordHeartbeat(roomId, presenceId, ownerId, now = Date.now()) {
   const room = getActiveRoom(roomId, now);
   if (!room) return null;
   upsertPresenceStmt.run(roomId, presenceId, ownerId, now);
+  recordVisitorIdentity(ownerId, now);
   return reconcileRoom(roomId, now);
 }
 
@@ -636,7 +716,7 @@ export function presenceCount(roomId) {
   return db.prepare("SELECT COUNT(*) AS n FROM presence WHERE room_id = ?").get(roomId).n;
 }
 
-// --- Public Canvas presence (the landing page's "Online Now" counter) ------
+// --- Public Canvas presence (landing page + the Public Canvas editor) ------
 // Public has no `rooms` row at all (it never expires, unlike a Private Room),
 // so it can't reuse recordHeartbeat/leavePresence/reconcileRoom above -- all
 // three are gated on an actual room row existing. But the `presence` table
@@ -648,34 +728,31 @@ export function presenceCount(roomId) {
 // (Room codes are always 6 uppercase letters/digits -- see
 // ROOM_CODE_ALPHABET/ROOM_CODE_LENGTH above -- so this can never collide with
 // one; the same "__public__" convention is already used for the unrelated
-// SSE subscriber scoping in server/index.js's opScopeKey.)
+// SSE subscriber scoping in server/index.js's opScopeKey.) Both the landing
+// page (public/landing.js) and the Public Canvas editor itself (public/
+// app.js, when isPublicCanvas) call this same heartbeat -- "Online Now" is
+// a single site-wide number (see countOnlineNow above), not a per-page one,
+// so every page that counts toward it shares this one scope.
 const PUBLIC_PRESENCE_SCOPE = "__public__";
-const countLivePresenceStmt = db.prepare("SELECT COUNT(*) AS n FROM presence WHERE room_id = ? AND last_seen >= ?");
 
-// Renews one landing-page tab's lease and, in the same call, prunes this
-// scope's own stale rows (the "stale-session cleanup" this feature needs) --
-// there is no background sweep timer for Public, the same lazy,
-// triggered-by-activity cleanup style reconcileRoom already uses for rooms,
-// just without any room-expiry bookkeeping to go with it.
+// Renews one tab's lease and, in the same call, prunes this scope's own
+// stale rows (the "stale-session cleanup" this feature needs) -- there is no
+// background sweep timer for Public, the same lazy, triggered-by-activity
+// cleanup style reconcileRoom already uses for rooms, just without any
+// room-expiry bookkeeping to go with it.
 export function recordPublicHeartbeat(presenceId, ownerId, now = Date.now()) {
   upsertPresenceStmt.run(PUBLIC_PRESENCE_SCOPE, presenceId, ownerId, now);
+  recordVisitorIdentity(ownerId, now);
   deleteStalePresenceStmt.run(PUBLIC_PRESENCE_SCOPE, now - STALE_TIMEOUT_MS);
 }
 
-// Proactively removes exactly one tab's lease (a landing page being closed,
-// or Enter Canvas navigating away) -- best-effort, the same role
-// leavePresence plays for rooms; the lease simply going stale is still the
-// correctness fallback for a closed tab, a crash, or a lost network.
+// Proactively removes exactly one tab's lease (a landing page or Public
+// Canvas tab being closed, or Enter Canvas navigating away) -- best-effort,
+// the same role leavePresence plays for rooms; the lease simply going stale
+// is still the correctness fallback for a closed tab, a crash, or a lost
+// network.
 export function leavePublicPresence(presenceId) {
   deleteOnePresenceStmt.run(PUBLIC_PRESENCE_SCOPE, presenceId);
-}
-
-// The one definition of "Online Now": live (non-stale) presence rows under
-// the Public scope, counted by presence_id (one lease per tab/page-load,
-// exactly like every other presence row) -- never a count of `guests` table
-// rows, which is total-ever-seen history, not who is here right now.
-export function countLivePublicPresence(now = Date.now()) {
-  return countLivePresenceStmt.get(PUBLIC_PRESENCE_SCOPE, now - STALE_TIMEOUT_MS).n;
 }
 
 // --- Guest nickname (cosmetic display metadata, never an authority) --------

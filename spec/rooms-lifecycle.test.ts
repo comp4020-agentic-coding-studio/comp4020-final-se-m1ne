@@ -362,22 +362,24 @@ describe("Private Room lifecycle", () => {
 // room's own (same table, same staleness definition), just scoped to a fixed
 // sentinel instead of a real room code (see server/db.js's own comment on
 // why this is safe -- no FK, and room codes can never collide with it).
-// Explicit injected `now` throughout, same reasoning as the rest of this
-// file: staleness is proven deterministically, never by really waiting
-// STALE_TIMEOUT_MS (90s) out.
+// countOnlineNow() itself is intentionally site-wide (DISTINCT owner_id
+// across every room_id, Public and every Private Room alike) -- see its own
+// comment in server/db.js. Explicit injected `now` throughout, same
+// reasoning as the rest of this file: staleness is proven deterministically,
+// never by really waiting STALE_TIMEOUT_MS (90s) out.
 describe("Public Canvas presence (Online Now counter)", () => {
   it("a heartbeat makes exactly one presence-id count as online", () => {
     const t0 = 100_000_000;
     db.recordPublicHeartbeat(randomUUID(), randomUUID(), t0);
-    expect(db.countLivePublicPresence(t0)).toBe(1);
+    expect(db.countOnlineNow(t0)).toBe(1);
   });
 
-  it("two different tabs (two presence ids) both count, even under the same owner", () => {
+  it("two different tabs (two presence ids) count once, since they share the same owner", () => {
     const t0 = 101_000_000;
     const sameOwner = randomUUID();
     db.recordPublicHeartbeat(randomUUID(), sameOwner, t0);
     db.recordPublicHeartbeat(randomUUID(), sameOwner, t0);
-    expect(db.countLivePublicPresence(t0)).toBe(2);
+    expect(db.countOnlineNow(t0)).toBe(1); // DISTINCT owner_id, not distinct presence leases
   });
 
   it("a renewed heartbeat for the same presence id does not double-count", () => {
@@ -386,7 +388,7 @@ describe("Public Canvas presence (Online Now counter)", () => {
     const ownerId = randomUUID();
     db.recordPublicHeartbeat(presenceId, ownerId, t0);
     db.recordPublicHeartbeat(presenceId, ownerId, t0 + 1000);
-    expect(db.countLivePublicPresence(t0 + 1000)).toBe(1);
+    expect(db.countOnlineNow(t0 + 1000)).toBe(1);
   });
 
   it("leaving removes exactly that one lease from the live count", () => {
@@ -395,10 +397,10 @@ describe("Public Canvas presence (Online Now counter)", () => {
     const leaving = randomUUID();
     db.recordPublicHeartbeat(staying, randomUUID(), t0);
     db.recordPublicHeartbeat(leaving, randomUUID(), t0);
-    expect(db.countLivePublicPresence(t0)).toBe(2);
+    expect(db.countOnlineNow(t0)).toBe(2);
 
     db.leavePublicPresence(leaving);
-    expect(db.countLivePublicPresence(t0)).toBe(1);
+    expect(db.countOnlineNow(t0)).toBe(1);
   });
 
   it("a lease older than STALE_TIMEOUT_MS no longer counts as online (and is pruned by the next heartbeat)", () => {
@@ -406,13 +408,13 @@ describe("Public Canvas presence (Online Now counter)", () => {
     const stalePresenceId = randomUUID();
     db.recordPublicHeartbeat(stalePresenceId, randomUUID(), t0);
     const justStale = t0 + db.STALE_TIMEOUT_MS + 1;
-    expect(db.countLivePublicPresence(justStale)).toBe(0);
+    expect(db.countOnlineNow(justStale)).toBe(0);
 
     // The stale-session cleanup this feature needs: a fresh heartbeat from
     // someone else, at the later instant, physically prunes the stale row
     // rather than leaving it to accumulate forever.
     db.recordPublicHeartbeat(randomUUID(), randomUUID(), justStale);
-    expect(db.countLivePublicPresence(justStale)).toBe(1);
+    expect(db.countOnlineNow(justStale)).toBe(1);
   });
 
   it("distinguishes active sessions from historical visitors: a saved guest profile with no heartbeat is never counted online", () => {
@@ -420,20 +422,64 @@ describe("Public Canvas presence (Online Now counter)", () => {
     const neverVisitedOwner = randomUUID();
     db.setGuestNickname(neverVisitedOwner, "Ghost", t0);
     db.setGuestCursorColor(neverVisitedOwner, "#abcdef");
-    expect(db.countLivePublicPresence(t0)).toBe(0);
+    expect(db.countOnlineNow(t0)).toBe(0);
 
     // A real, separate presence lease for someone else is unaffected by how
     // many historical guest rows exist.
     db.recordPublicHeartbeat(randomUUID(), randomUUID(), t0);
-    expect(db.countLivePublicPresence(t0)).toBe(1);
+    expect(db.countOnlineNow(t0)).toBe(1);
   });
 
-  it("Public presence is isolated from every real room's own presence count", () => {
+  it("Online Now is site-wide: a Private Room's own presence counts toward it alongside Public's", () => {
     const t0 = 106_000_000;
     const code = db.createRoom(randomUUID(), randomUUID(), t0); // a room presence row
-    db.recordPublicHeartbeat(randomUUID(), randomUUID(), t0); // a Public presence row
+    db.recordPublicHeartbeat(randomUUID(), randomUUID(), t0); // a Public presence row, different owner
 
-    expect(db.presenceCount(code)).toBe(1);
-    expect(db.countLivePublicPresence(t0)).toBe(1); // not 2 -- the room's own lease never leaks into Public's count
+    expect(db.presenceCount(code)).toBe(1); // the room's own per-room count still sees only its own lease
+    expect(db.countOnlineNow(t0)).toBe(2); // but the site-wide count sees both distinct owners
+  });
+});
+
+// "Total Visitors": a monotonic, all-time distinct-owner count, completely
+// independent of the `presence` table's own pruning/staleness -- see
+// server/db.js's own comment on visitor_identities and recordVisitorIdentity.
+describe("Total Visitors counter", () => {
+  it("a new owner's first heartbeat (Public, a room, or room presence) increases the count by exactly one", () => {
+    const t0 = 200_000_000;
+    const before = Number(db.countTotalVisitors());
+    db.recordPublicHeartbeat(randomUUID(), randomUUID(), t0);
+    expect(Number(db.countTotalVisitors())).toBe(before + 1);
+  });
+
+  it("refreshing, a second tab, or renewing the same owner's heartbeat never increases the count", () => {
+    const t0 = 201_000_000;
+    const sameOwner = randomUUID();
+    db.recordPublicHeartbeat(randomUUID(), sameOwner, t0);
+    const afterFirst = db.countTotalVisitors();
+
+    db.recordPublicHeartbeat(randomUUID(), sameOwner, t0 + 1000); // "another tab"
+    db.recordPublicHeartbeat(randomUUID(), sameOwner, t0 + 2000); // "refreshing" again
+    expect(db.countTotalVisitors()).toBe(afterFirst);
+  });
+
+  it("switching from Public to a Private Room under the same owner never increases the count", () => {
+    const t0 = 202_000_000;
+    const ownerId = randomUUID();
+    db.recordPublicHeartbeat(randomUUID(), ownerId, t0);
+    const afterPublic = db.countTotalVisitors();
+
+    db.createRoom(randomUUID(), ownerId, t0); // same owner, a different room
+    expect(db.countTotalVisitors()).toBe(afterPublic);
+  });
+
+  it("never decreases: leaving, going stale, or a room expiring and pruning its presence rows leaves it unchanged", () => {
+    const t0 = 203_000_000;
+    const presenceId = randomUUID();
+    const ownerId = randomUUID();
+    db.recordPublicHeartbeat(presenceId, ownerId, t0);
+    const afterJoin = db.countTotalVisitors();
+
+    db.leavePublicPresence(presenceId);
+    expect(db.countTotalVisitors()).toBe(afterJoin);
   });
 });

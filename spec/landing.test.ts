@@ -201,15 +201,17 @@ it("re-saving a profile under the same cookie updates the same guest identity, n
   expect(me.nickname).toBe("JamieV2"); // the one record was updated in place, not duplicated
 });
 
-it("Public's SSE sync frame reports a numeric onlineCount, and a heartbeat broadcasts an updated 'presence' event on the same stream", async () => {
+it("Public's SSE sync frame reports numeric onlineCount and totalVisitors, and a heartbeat broadcasts an updated 'presence' event on the same stream", async () => {
   const stream = await connect("/api/ops/stream");
   const sync = await stream.next();
   expect(sync.event).toBe("sync");
   expect(typeof sync.data.onlineCount).toBe("number");
+  expect(typeof sync.data.totalVisitors).toBe("number");
 
   const hb = await postJson("/api/presence/heartbeat", { presenceId: crypto.randomUUID() });
   expect(hb.status).toBe(200);
-  expect(typeof hb.body.count).toBe("number");
+  expect(typeof hb.body.onlineCount).toBe("number");
+  expect(typeof hb.body.totalVisitors).toBe("number");
 
   // Public's own stream is shared with every other concurrently-running spec
   // file in this suite (draws, cursors, other heartbeats) -- same documented
@@ -221,7 +223,8 @@ it("Public's SSE sync frame reports a numeric onlineCount, and a heartbeat broad
   while (Date.now() < deadline && !sawPresence) {
     const ev = await stream.next(deadline - Date.now());
     if (ev.event === "presence") {
-      expect(typeof ev.data.count).toBe("number");
+      expect(typeof ev.data.onlineCount).toBe("number");
+      expect(typeof ev.data.totalVisitors).toBe("number");
       sawPresence = true;
     }
   }
@@ -235,13 +238,24 @@ it("/api/presence/heartbeat and /leave both require a presenceId", async () => {
   expect(leave.status).toBe(400);
 });
 
-it("leaving Public presence is reflected in the next heartbeat's count, same shape as joining", async () => {
+// This file's server/DB is shared across every concurrently-running spec
+// file in the suite (see spec/global-setup.ts) -- both counters can be
+// bumped by unrelated tests at any moment, so only monotonicity/shape can be
+// asserted safely here. The precise "same owner never increases Total
+// Visitors" guarantee is instead proven deterministically, with no
+// concurrent interference, in spec/rooms-lifecycle.test.ts's own "Total
+// Visitors counter" block (a dedicated, throwaway DB instance).
+it("leaving Public presence never increases onlineCount", async () => {
   const idA = crypto.randomUUID();
-  const idB = crypto.randomUUID();
   const after1 = await postJson("/api/presence/heartbeat", { presenceId: idA });
-  const after2 = await postJson("/api/presence/heartbeat", { presenceId: idB });
-  expect(after2.body.count).toBeGreaterThanOrEqual(after1.body.count);
+  const afterLeave = await postJson("/api/presence/leave", { presenceId: idA });
+  expect(afterLeave.body.onlineCount).toBeLessThanOrEqual(after1.body.onlineCount);
+});
 
-  const afterLeave = await postJson("/api/presence/leave", { presenceId: idB });
-  expect(afterLeave.body.count).toBeLessThan(after2.body.count);
+it("a heartbeat's totalVisitors is numeric and never decreases across sequential calls", async () => {
+  const before = await postJson("/api/presence/heartbeat", { presenceId: crypto.randomUUID() });
+  expect(typeof before.body.totalVisitors).toBe("number");
+
+  const after = await postJson("/api/presence/heartbeat", { presenceId: crypto.randomUUID() });
+  expect(after.body.totalVisitors).toBeGreaterThanOrEqual(before.body.totalVisitors); // a monotonic counter: it can be bumped by unrelated concurrent tests, but never goes backwards
 });

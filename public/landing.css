@@ -164,6 +164,20 @@ body {
   flex-shrink: 0;
 }
 
+/* Same bottom-right stack as #online-counter, directly above it -- no dot
+   (this is an all-time total, not a live presence signal). */
+#total-visitors-counter {
+  position: fixed;
+  right: 18px;
+  bottom: 54px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+  font-family: var(--mono-font);
+}
+
 /* --- Welcome dialog ---------------------------------------------------------
    Same overlay+popover-style dialog surface as the editor's own popovers
    (public/styles.css's #profile-popover/#help-popover) -- compact,
@@ -274,5 +288,10 @@ body {
   #online-counter {
     right: 10px;
     bottom: 10px;
+  }
+
+  #total-visitors-counter {
+    right: 10px;
+    bottom: 46px;
   }
 }

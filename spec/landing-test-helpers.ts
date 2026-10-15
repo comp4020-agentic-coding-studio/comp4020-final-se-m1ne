@@ -44,7 +44,7 @@ export function installLandingFetchMock(posted: PostedRequest[], me: { nickname:
       if (url === "/api/presence/heartbeat" || url === "/api/presence/leave") {
         const body = init?.body ? JSON.parse(String(init.body)) : {};
         posted.push({ url, body });
-        return jsonResponse({ ok: true, count: 1 });
+        return jsonResponse({ ok: true, onlineCount: 1, totalVisitors: 1 });
       }
       return jsonResponse({});
     }),
@@ -68,6 +68,6 @@ export async function bootLandingForTest(
   installLandingFetchMock(posted, me);
   await import("../public/landing.js");
   await flush();
-  latestEventSource().emit("sync", { docKind: "freehand", ops: [], onlineCount: 3 });
+  latestEventSource().emit("sync", { docKind: "freehand", ops: [], onlineCount: 3, totalVisitors: 5 });
   await flush();
 }

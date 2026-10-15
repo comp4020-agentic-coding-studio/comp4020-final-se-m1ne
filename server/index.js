@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { getOrSetAnonId } from "./anon.js";
 import {
   abandonRedoBranch,
-  countLivePublicPresence,
+  countOnlineNow,
+  countTotalVisitors,
   createRoom,
   getActiveRoom,
   getGuestProfile,
@@ -459,13 +460,18 @@ function startPixelStream(req, res, roomId, width, height) {
 // (public/viewport.js's own fixed DOCUMENT_WIDTH/HEIGHT cover every freehand
 // document, Public and every room alike), so there is nothing document-sized
 // to include here. For Public specifically (roomId === null), the payload
-// also carries the current "Online Now" count (countLivePublicPresence) --
-// the landing page's read-only renderer and the Public editor both connect
-// here, so this one synchronous snapshot is enough to show a correct count
+// also carries the current site-wide "Online Now" (countOnlineNow -- every
+// guest identity with a live presence lease ANYWHERE: Public, the landing
+// page, or any Private Room) and "Total Visitors" (countTotalVisitors --
+// every distinct guest identity ever recorded, monotonic) counts -- the
+// landing page is the only thing that ever displays these, and it connects
+// here, so this one synchronous snapshot is enough to show correct numbers
 // immediately on connect, before this tab's own first heartbeat (or anyone
-// else's) has even landed; see the "presence" event (broadcast from the
-// heartbeat/leave routes below) for how it stays live after that. Omitted
-// for a Private Room -- this feature is Public-only, see the project brief.
+// else's) has even landed; see the "presence" event (broadcast from every
+// heartbeat/leave route, Public-scoped and room-scoped alike, below) for how
+// they stay live after that. Omitted for a Private Room's own stream -- the
+// counts themselves are Public-only to *display*, even though Private Room
+// presence now counts toward them.
 function startFreehandStream(req, res, roomId) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -476,7 +482,10 @@ function startFreehandStream(req, res, roomId) {
 
   const unsubscribe = subscribeFreehandStream(roomId, res);
   const ops = listOps(roomId, "freehand");
-  const syncPayload = roomId === null ? { docKind: "freehand", ops, onlineCount: countLivePublicPresence() } : { docKind: "freehand", ops };
+  const syncPayload =
+    roomId === null
+      ? { docKind: "freehand", ops, onlineCount: countOnlineNow(), totalVisitors: countTotalVisitors() }
+      : { docKind: "freehand", ops };
   res.write(`event: sync\ndata: ${JSON.stringify(syncPayload)}\n\n`);
 
   const heartbeat = setInterval(() => {
@@ -1190,6 +1199,11 @@ app.post("/api/rooms/:code/presence", (req, res) => {
     res.status(404).json({ error: "no such room" });
     return;
   }
+  // A Private Room guest's presence is also part of the site-wide "Online
+  // Now"/"Total Visitors" counts the landing page displays (see
+  // broadcastOnlineCounts's own comment) -- broadcast the refresh the same
+  // way the Public-scoped routes further below do.
+  broadcastOnlineCounts();
   res.status(200).json({ ok: true });
 });
 
@@ -1213,17 +1227,35 @@ app.post("/api/rooms/:code/leave", (req, res) => {
     res.status(404).json({ error: "no such room" });
     return;
   }
+  // Mirrors the room-scoped presence route above and the Public-scoped leave
+  // route below: a Private Room guest leaving also affects the site-wide
+  // "Online Now" count, so broadcast the refresh the same way.
+  broadcastOnlineCounts();
   res.status(200).json({ ok: true });
 });
 
-// --- Public Canvas presence (the landing page's "Online Now" counter) ------
+// Recomputes both site-wide counters and broadcasts them together as one
+// "presence" event over Public's own freehand SSE stream (the only place the
+// landing page ever listens) -- called after EVERY presence-affecting write,
+// Public-scoped (below) and room-scoped (the two /api/rooms/:code/* routes
+// above) alike, since a guest's presence changing in a Private Room affects
+// this exact same site-wide number. Returns the counts so a route's own JSON
+// response can include them too, without a second pair of queries.
+function broadcastOnlineCounts() {
+  const onlineCount = countOnlineNow();
+  const totalVisitors = countTotalVisitors();
+  broadcastFreehandEvent(null, "presence", { onlineCount, totalVisitors });
+  return { onlineCount, totalVisitors };
+}
+
+// --- Public Canvas presence (landing page + Public Canvas editor) ----------
 // Same lease/heartbeat shape as the room-scoped routes above (presenceId
 // supplied by the client, ownerId always server-derived), scoped to Public
 // via recordPublicHeartbeat/leavePublicPresence (server/db.js) instead of a
 // room code -- there is no room to 404 against, so these always succeed.
-// Both broadcast the freshly-recomputed live count over Public's own
-// freehand SSE stream as a "presence" event, so every connected tab (the
-// landing page and the Public editor alike) updates without polling.
+// Both broadcast the freshly-recomputed site-wide counts, so every connected
+// tab (the landing page, the Public editor, and every Private Room alike --
+// though only the landing page ever displays them) updates without polling.
 app.post("/api/presence/heartbeat", (req, res) => {
   const { presenceId } = req.body ?? {};
   if (typeof presenceId !== "string" || presenceId.length === 0) {
@@ -1232,9 +1264,8 @@ app.post("/api/presence/heartbeat", (req, res) => {
   }
   const ownerId = getOrSetAnonId(req, res);
   recordPublicHeartbeat(presenceId, ownerId);
-  const count = countLivePublicPresence();
-  broadcastFreehandEvent(null, "presence", { count });
-  res.status(200).json({ ok: true, count });
+  const counts = broadcastOnlineCounts();
+  res.status(200).json({ ok: true, ...counts });
 });
 
 app.post("/api/presence/leave", (req, res) => {
@@ -1244,9 +1275,8 @@ app.post("/api/presence/leave", (req, res) => {
     return;
   }
   leavePublicPresence(presenceId);
-  const count = countLivePublicPresence();
-  broadcastFreehandEvent(null, "presence", { count });
-  res.status(200).json({ ok: true, count });
+  const counts = broadcastOnlineCounts();
+  res.status(200).json({ ok: true, ...counts });
 });
 
 // Serves the exact same canvas shell express.static would have served at /,

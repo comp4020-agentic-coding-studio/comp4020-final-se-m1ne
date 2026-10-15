@@ -109,7 +109,7 @@ describe("read-only background", () => {
 });
 
 describe("live background compatibility with existing realtime events", () => {
-  it("renders a sync snapshot and a subsequent 'op' without throwing, and shows the live onlineCount", async () => {
+  it("renders a sync snapshot and a subsequent 'op' without throwing, and shows the live onlineCount and totalVisitors", async () => {
     posted = [];
     await bootLandingForTest(posted);
     const source = latestEventSource();
@@ -127,9 +127,11 @@ describe("live background compatibility with existing realtime events", () => {
     await flush();
 
     expect(document.getElementById("online-count")!.textContent).toBe("3"); // from the sync frame's onlineCount
+    expect(document.getElementById("total-visitors-count")!.textContent).toBe("5"); // from the sync frame's totalVisitors
 
-    source.emit("presence", { count: 7 });
+    source.emit("presence", { onlineCount: 7, totalVisitors: 9 });
     await flush();
     expect(document.getElementById("online-count")!.textContent).toBe("7");
+    expect(document.getElementById("total-visitors-count")!.textContent).toBe("9");
   });
 });

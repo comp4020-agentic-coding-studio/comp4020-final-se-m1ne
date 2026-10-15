@@ -55,6 +55,16 @@
       <span>Online Now</span>
     </div>
 
+    <!-- Site-wide, all-time distinct guest count (server/db.js's
+         countTotalVisitors) -- a separate, non-live-dot stat sitting above
+         the Online Now counter, same compact .app-button surface. Never
+         decreases, unaffected by refreshes/tabs/room switches: see
+         public/landing.js's setTotalVisitors. -->
+    <div id="total-visitors-counter" class="app-button" aria-live="polite">
+      <span id="total-visitors-count">0</span>
+      <span>Total Visitors</span>
+    </div>
+
     <!-- The Welcome dialog -- shown every time "Enter Canvas" is clicked,
          for a first-time AND a returning visitor alike (see
          public/landing.js's handleEnterCanvas): the introduction is the same

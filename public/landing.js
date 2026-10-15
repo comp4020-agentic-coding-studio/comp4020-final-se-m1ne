@@ -10,6 +10,7 @@ import { renderAboutContent } from "./about-content.js";
 const canvas = document.getElementById("landing-canvas");
 const enterButton = document.getElementById("enter-canvas-button");
 const onlineCountEl = document.getElementById("online-count");
+const totalVisitorsCountEl = document.getElementById("total-visitors-count");
 const onboardingOverlay = document.getElementById("onboarding-overlay");
 const onboardingAbout = document.getElementById("onboarding-about");
 const onboardingNicknameInput = document.getElementById("onboarding-nickname-input");
@@ -34,14 +35,20 @@ function startCanvasSync() {
     const data = JSON.parse(event.data);
     renderer.applySync(data.ops);
     if (typeof data.onlineCount === "number") setOnlineCount(data.onlineCount);
+    if (typeof data.totalVisitors === "number") setTotalVisitors(data.totalVisitors);
   });
   source.addEventListener("op", (event) => renderer.applyOp(JSON.parse(event.data)));
   source.addEventListener("undo", (event) => renderer.applyUndo(JSON.parse(event.data)));
   source.addEventListener("redo", (event) => renderer.applyRedo(JSON.parse(event.data)));
-  // Public's own "Online Now" count, pushed over this exact same stream
-  // (server/index.js's /api/presence/heartbeat and /leave routes) rather
+  // Site-wide "Online Now"/"Total Visitors" counts, pushed over this exact
+  // same stream (server/index.js's broadcastOnlineCounts, called from every
+  // presence-affecting route -- Public-scoped and room-scoped alike) rather
   // than polled separately -- one connection, one source of live updates.
-  source.addEventListener("presence", (event) => setOnlineCount(JSON.parse(event.data).count));
+  source.addEventListener("presence", (event) => {
+    const data = JSON.parse(event.data);
+    if (typeof data.onlineCount === "number") setOnlineCount(data.onlineCount);
+    if (typeof data.totalVisitors === "number") setTotalVisitors(data.totalVisitors);
+  });
   // cursor/cursor-hide/stroke/stroke-end events exist on this same stream
   // for the interactive editor's own remote cursors and in-progress stroke
   // previews -- this page has no such UI at all (it is read-only ambient
@@ -54,6 +61,10 @@ function startCanvasSync() {
 
 function setOnlineCount(count) {
   onlineCountEl.textContent = String(count);
+}
+
+function setTotalVisitors(count) {
+  totalVisitorsCountEl.textContent = String(count);
 }
 
 // --- "Online Now" presence --------------------------------------------------
@@ -77,7 +88,8 @@ async function sendHeartbeat() {
     });
     if (res.ok) {
       const data = await res.json();
-      if (typeof data.count === "number") setOnlineCount(data.count);
+      if (typeof data.onlineCount === "number") setOnlineCount(data.onlineCount);
+      if (typeof data.totalVisitors === "number") setTotalVisitors(data.totalVisitors);
     }
   } catch {
     // best-effort, same spirit as every other heartbeat in this codebase --
