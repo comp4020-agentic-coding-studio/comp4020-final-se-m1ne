@@ -292,9 +292,18 @@ export function initColourPicker({ initialColor = "#1d1d1d", onChange } = {}) {
   function openColourPopover() {
     const rect = editColourButton.getBoundingClientRect();
     const popoverWidth = 232;
-    colourPopover.style.top = `${rect.bottom + 6}px`;
-    colourPopover.style.left = `${Math.min(rect.left, window.innerWidth - popoverWidth - 8)}px`;
     colourPopover.hidden = false;
+    // Keep the whole popup inside the viewport: below the button if it fits,
+    // else above it, else pinned to the viewport edge (CSS max-height then
+    // scrolls it internally).
+    const margin = 8;
+    const height = Math.min(colourPopover.offsetHeight, window.innerHeight - margin * 2);
+    let top = rect.bottom + 6;
+    if (top + height > window.innerHeight - margin) {
+      top = rect.top - 6 - height >= margin ? rect.top - 6 - height : Math.max(margin, window.innerHeight - margin - height);
+    }
+    colourPopover.style.top = `${top}px`;
+    colourPopover.style.left = `${Math.min(rect.left, window.innerWidth - popoverWidth - margin)}px`;
     editColourButton.setAttribute("aria-expanded", "true");
     renderColourWheel();
   }

@@ -231,6 +231,8 @@ body {
   position: fixed;
   z-index: 30;
   width: 232px;
+  max-height: calc(100vh - 16px); /* never taller than the viewport; scrolls inside if needed */
+  overflow-y: auto;
   background: var(--popover-bg);
   border: 1px solid var(--popover-border);
   border-radius: var(--radius-sm);
@@ -252,6 +254,13 @@ body {
   margin-bottom: 8px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--divider);
+  /* Stays visible while the popup scrolls internally, so Close is always reachable. */
+  position: sticky;
+  top: -10px; /* cancels the popup's own 10px top padding */
+  padding-top: 10px;
+  margin-top: -10px;
+  background: var(--popover-bg);
+  z-index: 1;
 }
 
 #colour-popover-close {
@@ -1431,15 +1440,15 @@ body {
    handling (no separate colour state). */
 #palette {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  max-width: 236px; /* the desktop sidebar's content width, so swatches stay compact when the column goes full width on mobile */
+  grid-template-columns: repeat(4, 40px); /* same 40px squares as the first-row controls, 10px gaps both ways */
+  gap: 10px;
+  justify-content: start;
 }
 
 .swatch {
   box-sizing: border-box;
-  width: 100%;
-  aspect-ratio: 1;
+  width: 40px;
+  height: 40px;
   padding: 0;
   border: 1px solid #cdbba5;
   border-radius: var(--shell-radius-button);
