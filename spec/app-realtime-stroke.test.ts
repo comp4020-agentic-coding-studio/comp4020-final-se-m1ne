@@ -388,6 +388,30 @@ describe("Remote erase preview (reversible compositing)", () => {
   });
 });
 
+// Regression for the Online Now undercount bug: the Public Canvas editor
+// (booted here, roomCode === null) never called /api/presence/heartbeat at
+// all, so a guest who opened /canvas directly (without ever visiting the
+// landing page) had no presence lease anywhere on the site -- site-wide
+// Online Now (server/db.js's countOnlineNow) silently excluded them. Fixed
+// in public/app.js by giving isPublicCanvas its own heartbeat loop, the same
+// one public/landing.js already used. The server-side site-wide aggregation
+// itself (distinct-owner counting, Private Room presence counting toward the
+// same total, staleness/expiry) is covered deterministically in
+// spec/rooms-lifecycle.test.ts's own "Public Canvas presence" block; this
+// test only proves the Public Canvas editor actually calls the heartbeat
+// endpoint in the first place.
+describe("Public Canvas presence (Online Now regression)", () => {
+  it("booting the Public Canvas editor directly (no landing-page visit) registers a site-wide presence heartbeat", async () => {
+    await bootAppForTest(posted);
+    await flush();
+    const heartbeats = posted.filter((p) => p.url === "/api/presence/heartbeat");
+    expect(heartbeats.length).toBeGreaterThan(0);
+    const presenceId = heartbeats[0].body.presenceId;
+    expect(typeof presenceId).toBe("string");
+    expect((presenceId as string).length).toBeGreaterThan(0);
+  });
+});
+
 describe("Part 2: theme toggle", () => {
   it("clicking the toggle flips the theme and updates the button label immediately", async () => {
     document.documentElement.dataset.theme = "light";

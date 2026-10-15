@@ -160,6 +160,11 @@ export function installFetchMock(posted: PostedRequest[]) {
       if (url.endsWith("/undo") || url.endsWith("/redo")) {
         return jsonResponse({ op: null });
       }
+      if (url === "/api/presence/heartbeat" || url === "/api/presence/leave" || url.endsWith("/presence") || url.endsWith("/leave")) {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        posted.push({ url, body });
+        return jsonResponse({ ok: true, onlineCount: 1, totalVisitors: 1 });
+      }
       return jsonResponse({});
     }),
   );

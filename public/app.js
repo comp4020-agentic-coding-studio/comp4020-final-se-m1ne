@@ -1547,6 +1547,48 @@ function stopPresence() {
   }
 }
 
+// Public Canvas's own lease, registered the exact same way the landing
+// page's own presence does (public/landing.js's sendHeartbeat/startPresence,
+// server/index.js's /api/presence/heartbeat -- server/db.js's
+// recordPublicHeartbeat), via the same site-wide `presence` table and
+// therefore the same site-wide Online Now count. Without this, a guest who
+// opens /canvas directly (never visiting the landing page first) had no
+// presence lease anywhere at all, and Online Now undercounted the site's
+// actual active guests. Reuses the same presenceId/heartbeatHandle module
+// state as the Private Room lease above -- isPublicCanvas and a Private Room
+// are mutually exclusive on any one page load, so only one of the two ever
+// runs.
+async function sendPublicHeartbeat() {
+  try {
+    await fetch("/api/presence/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ presenceId }),
+    });
+  } catch {
+    // best-effort, see sendHeartbeat above
+  }
+}
+
+function startPublicPresence() {
+  presenceId = crypto.randomUUID();
+  sendPublicHeartbeat();
+  heartbeatHandle = setInterval(sendPublicHeartbeat, HEARTBEAT_INTERVAL_MS);
+}
+
+// Best-effort proactive leave on navigation/tab close -- sendBeacon, same
+// reasoning as public/landing.js's own leavePresenceBestEffort (a Blob with
+// an explicit JSON content type, since fetch may not survive an unloading
+// page and sendBeacon's own default content type isn't JSON).
+function leavePublicPresenceBestEffort() {
+  if (!presenceId || typeof navigator.sendBeacon !== "function") return;
+  try {
+    navigator.sendBeacon("/api/presence/leave", new Blob([JSON.stringify({ presenceId })], { type: "application/json" }));
+  } catch {
+    // best-effort
+  }
+}
+
 // Proactively drops this one presence row before navigating away, so the
 // room's occupancy (and empty_since, if this was the last live lease)
 // reflects the Leave immediately rather than only after the lease goes
@@ -1598,6 +1640,9 @@ if (isPublicCanvas) {
     const code = joinRoomCodeInput.value.trim().toUpperCase();
     if (code) location.href = `/room/${code}`;
   });
+
+  window.addEventListener("pagehide", leavePublicPresenceBestEffort);
+  startPublicPresence();
 } else {
   publicRoomControls.hidden = true;
   privateRoomControls.hidden = false;
