@@ -266,15 +266,6 @@ body {
   border-radius: var(--radius-sm);
 }
 
-#onboarding-colour-input {
-  width: 44px;
-  height: 30px;
-  padding: 0;
-  border: 1px solid var(--input-border);
-  border-radius: var(--radius-sm);
-  background: var(--input-bg);
-}
-
 #onboarding-start-button {
   margin-top: 2px;
   align-self: flex-start;

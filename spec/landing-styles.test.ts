@@ -169,3 +169,42 @@ describe("landing title panel and Enter Canvas button match the fixed desktop de
     expect(narrowSection).toMatch(/#landing-cta/);
   });
 });
+
+describe("cursor colour selector uses the specified sizes and colours", () => {
+  const sharedCss = fs.readFileSync(path.resolve(__dirname, "../public/shared-ui.css"), "utf8");
+
+  it("presets are 40x40 circles with the specified borders, and selection keeps the outer size", () => {
+    const swatch = block(sharedCss, "\.cursor-swatch");
+    expect(swatch).toMatch(/box-sizing:\s*border-box/); // a 3px selected border cannot grow the 40px box
+    expect(swatch).toMatch(/width:\s*40px/);
+    expect(swatch).toMatch(/height:\s*40px/);
+    expect(swatch).toMatch(/border-radius:\s*50%/);
+    expect(swatch).toMatch(/border:\s*1px solid #d5c7b5/);
+    expect(block(sharedCss, "\.cursor-swatch\.is-selected")).toMatch(/border:\s*3px solid #56483d/);
+  });
+
+  it("the Custom button and label match the specification", () => {
+    const custom = block(sharedCss, "\.cursor-custom-button");
+    for (const rule of [/height:\s*40px/, /font-size:\s*14px/, /font-weight:\s*600/, /color:\s*#75624e/, /background:\s*#fffdf9/, /border:\s*1px solid #cdbba5/, /border-radius:\s*10px/, /gap:\s*6px/]) {
+      expect(custom).toMatch(rule);
+    }
+    expect(block(sharedCss, "\.cursor-custom-button\.is-selected")).toMatch(/#56483d/);
+    const label = block(sharedCss, "\.cursor-colour-label");
+    expect(label).toMatch(/font-size:\s*14px/);
+    expect(label).toMatch(/font-weight:\s*600/);
+    expect(label).toMatch(/color:\s*#806e5a/);
+    expect(block(sharedCss, "\.cursor-colour-field")).toMatch(/gap:\s*12px/);
+  });
+
+  it("the row has a 10px gap and wraps instead of scrolling", () => {
+    const row = block(sharedCss, "\.cursor-colour-picker");
+    expect(row).toMatch(/gap:\s*10px/);
+    expect(row).toMatch(/flex-wrap:\s*wrap/);
+  });
+
+  it("all three places that choose a cursor colour use the selector", () => {
+    expect(landingHtml).toMatch(/id="onboarding-colour-picker"/);
+    expect(indexHtml).toMatch(/id="profile-colour-picker"/);
+    expect(indexHtml).toMatch(/id="guest-setup-colour-picker"/);
+  });
+});

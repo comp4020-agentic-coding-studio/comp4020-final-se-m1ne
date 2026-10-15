@@ -6,6 +6,7 @@
 // making the background secretly interactive).
 import { createPublicCanvasRenderer } from "./landing-canvas.js";
 import { renderAboutContent } from "./about-content.js";
+import { initCursorColourPicker } from "./cursor-colour-picker.js";
 import { installNavigationMarking, isNavigating, markNavigating, releasePreviousLease } from "./presence-handoff.js";
 
 const canvas = document.getElementById("landing-canvas");
@@ -16,6 +17,10 @@ const onboardingOverlay = document.getElementById("onboarding-overlay");
 const onboardingAbout = document.getElementById("onboarding-about");
 const onboardingNicknameInput = document.getElementById("onboarding-nickname-input");
 const onboardingColourInput = document.getElementById("onboarding-colour-input");
+const onboardingColourPicker = initCursorColourPicker(
+  document.getElementById("onboarding-colour-picker"),
+  onboardingColourInput,
+);
 const onboardingStartButton = document.getElementById("onboarding-start-button");
 
 onboardingAbout.appendChild(renderAboutContent());
@@ -168,7 +173,7 @@ async function handleEnterCanvas() {
   existingNickname = me.nickname;
   existingCursorColor = me.cursorColor;
   onboardingNicknameInput.value = me.nickname ?? "";
-  onboardingColourInput.value = me.cursorColor ?? "#1e88e5";
+  onboardingColourPicker.setValue(me.cursorColor ?? "#1e88e5");
   onboardingStartButton.textContent = me.nickname === null ? "Start Drawing" : "Continue Drawing";
   onboardingOverlay.hidden = false;
 }

@@ -423,10 +423,12 @@
           <span class="group-label">Nickname</span>
           <input type="text" id="profile-nickname-input" maxlength="20" aria-label="Nickname" />
         </label>
-        <label class="profile-field">
-          <span class="group-label">Cursor colour</span>
-          <input type="color" id="profile-colour-input" aria-label="Cursor colour" />
-        </label>
+        <div class="cursor-colour-field">
+          <span class="cursor-colour-label" id="profile-colour-label">Cursor colour</span>
+          <div id="profile-colour-picker" role="group" aria-labelledby="profile-colour-label">
+            <input type="color" id="profile-colour-input" />
+          </div>
+        </div>
         <label class="profile-checkbox-row">
           <input type="checkbox" id="profile-show-nickname" />
           Show my nickname
@@ -474,10 +476,12 @@
             <span class="group-label">Nickname</span>
             <input type="text" id="guest-setup-nickname-input" maxlength="20" placeholder="Your name" aria-label="Nickname" />
           </label>
-          <label class="profile-field">
-            <span class="group-label">Cursor colour</span>
-            <input type="color" id="guest-setup-colour-input" value="#1e88e5" aria-label="Cursor colour" />
-          </label>
+          <div class="cursor-colour-field">
+            <span class="cursor-colour-label" id="guest-setup-colour-label">Cursor colour</span>
+            <div id="guest-setup-colour-picker" role="group" aria-labelledby="guest-setup-colour-label">
+              <input type="color" id="guest-setup-colour-input" value="#1e88e5" />
+            </div>
+          </div>
           <div id="guest-setup-actions">
             <button type="button" id="guest-setup-confirm" class="app-button">Get Started</button>
           </div>

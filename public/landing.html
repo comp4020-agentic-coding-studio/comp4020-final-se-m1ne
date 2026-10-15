@@ -75,10 +75,12 @@
               aria-label="Nickname"
             />
           </label>
-          <label class="onboarding-field">
-            <span class="onboarding-label">Cursor colour</span>
-            <input type="color" id="onboarding-colour-input" value="#1e88e5" aria-label="Cursor colour" />
-          </label>
+          <div class="cursor-colour-field">
+            <span class="cursor-colour-label" id="onboarding-colour-label">Cursor colour</span>
+            <div id="onboarding-colour-picker" role="group" aria-labelledby="onboarding-colour-label">
+              <input type="color" id="onboarding-colour-input" value="#1e88e5" />
+            </div>
+          </div>
           <button type="button" id="onboarding-start-button" class="app-button app-button-primary">Start Drawing</button>
         </div>
       </div>

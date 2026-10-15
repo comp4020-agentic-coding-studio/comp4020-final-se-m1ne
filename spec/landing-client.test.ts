@@ -93,6 +93,81 @@ describe("Welcome dialog", () => {
   });
 });
 
+describe("cursor colour selector", () => {
+  const PRESETS = ["#E89991", "#E8B967", "#9DB98B", "#8EB9D1", "#A99ACD", "#D69FBC"];
+
+  async function openDialog(me: { nickname: string | null; cursorColor: string | null }) {
+    posted = [];
+    await bootLandingForTest(posted, me);
+    document.getElementById("enter-canvas-button")!.dispatchEvent(new Event("click", { bubbles: true }));
+    await flush();
+    const picker = document.getElementById("onboarding-colour-picker")!;
+    return {
+      picker,
+      swatches: Array.from(picker.querySelectorAll<HTMLButtonElement>(".cursor-swatch")),
+      custom: picker.querySelector<HTMLButtonElement>(".cursor-custom-button")!,
+      input: document.getElementById("onboarding-colour-input") as HTMLInputElement,
+    };
+  }
+
+  it("renders six named presets in the specified order, then a labelled Custom button", async () => {
+    const { picker, swatches, custom } = await openDialog({ nickname: null, cursorColor: null });
+    expect(swatches.map((b) => b.style.backgroundColor)).toEqual(
+      PRESETS.map((hex) => {
+        const probe = document.createElement("span");
+        probe.style.backgroundColor = hex;
+        return probe.style.backgroundColor;
+      }),
+    );
+    expect(swatches.map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Soft coral", "Warm yellow", "Sage green", "Soft blue", "Lavender", "Dusty pink",
+    ]);
+    expect(custom.textContent).toContain("Custom");
+    expect(custom.querySelector("svg")).not.toBeNull();
+    expect(picker.getAttribute("role")).toBe("group");
+    expect(document.getElementById("onboarding-colour-label")!.textContent).toBe("Cursor colour");
+  });
+
+  it("clicking a preset selects only that preset and sets the colour submitted with the profile", async () => {
+    const { swatches, custom, input } = await openDialog({ nickname: null, cursorColor: null });
+    swatches[2].dispatchEvent(new Event("click", { bubbles: true }));
+    expect(input.value).toBe("#9db98b");
+    expect(swatches.map((b) => b.classList.contains("is-selected"))).toEqual([false, false, true, false, false, false]);
+    expect(swatches[2].getAttribute("aria-pressed")).toBe("true");
+    expect(custom.classList.contains("is-selected")).toBe(false);
+
+    swatches[4].dispatchEvent(new Event("click", { bubbles: true }));
+    expect(swatches.filter((b) => b.classList.contains("is-selected"))).toHaveLength(1);
+    expect(swatches[4].classList.contains("is-selected")).toBe(true);
+
+    (document.getElementById("onboarding-nickname-input") as HTMLInputElement).value = "Riley";
+    document.getElementById("onboarding-start-button")!.dispatchEvent(new Event("click", { bubbles: true }));
+    await flush();
+    expect(posted.find((p) => p.url === "/api/me/profile")!.body).toEqual({ nickname: "Riley", cursorColor: "#a99acd" });
+  });
+
+  it("choosing a custom colour selects Custom, shows its preview, and deselects every preset", async () => {
+    const { swatches, custom, input } = await openDialog({ nickname: null, cursorColor: null });
+    swatches[0].dispatchEvent(new Event("click", { bubbles: true }));
+    input.value = "#123456";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(custom.classList.contains("is-selected")).toBe(true);
+    expect((custom.querySelector(".cursor-custom-preview") as HTMLElement).style.backgroundColor).toBe("rgb(18, 52, 86)");
+    expect(swatches.some((b) => b.classList.contains("is-selected"))).toBe(false);
+  });
+
+  it("reopening restores a saved preset as that preset, and a non-preset colour as Custom", async () => {
+    const preset = await openDialog({ nickname: "Sam", cursorColor: "#8eb9d1" });
+    expect(preset.swatches.map((b) => b.classList.contains("is-selected"))).toEqual([false, false, false, true, false, false]);
+    expect(preset.custom.classList.contains("is-selected")).toBe(false);
+
+    const custom = await openDialog({ nickname: "Sam", cursorColor: "#ab12cd" });
+    expect(custom.swatches.some((b) => b.classList.contains("is-selected"))).toBe(false);
+    expect(custom.custom.classList.contains("is-selected")).toBe(true);
+    expect((custom.custom.querySelector(".cursor-custom-preview") as HTMLElement).style.backgroundColor).toBe("rgb(171, 18, 205)");
+  });
+});
+
 describe("read-only background", () => {
   it("pointer interaction with the live canvas never posts a draw/erase request", async () => {
     posted = [];

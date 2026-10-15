@@ -76,3 +76,116 @@
 .app-button-primary:active {
   background: var(--sage-hover);
 }
+
+/* --- Guest cursor colour selector (public/cursor-colour-picker.js) ----------
+   Six presets + a Custom button, shared by the landing Welcome dialog, the
+   editor's first-run guest dialog and the Profile popover. Colours and sizes
+   are the specified literals, not theme tokens. */
+.cursor-colour-field {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cursor-colour-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #806e5a;
+}
+
+.cursor-colour-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.cursor-swatch {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid #d5c7b5;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.cursor-swatch svg {
+  visibility: hidden;
+}
+
+.cursor-swatch.is-selected {
+  border: 3px solid #56483d;
+}
+
+.cursor-swatch.is-selected svg {
+  visibility: visible;
+}
+
+.cursor-custom-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.cursor-custom-button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: #75624e;
+  background: #fffdf9;
+  border: 1px solid #cdbba5;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.cursor-custom-button svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.cursor-custom-button.is-selected {
+  padding: 0 10px;
+  border: 3px solid #56483d;
+}
+
+.cursor-custom-preview {
+  display: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid #cdbba5;
+  border-radius: 50%;
+}
+
+.cursor-custom-button.is-selected .cursor-custom-preview {
+  display: inline-block;
+}
+
+.cursor-swatch:focus-visible,
+.cursor-custom-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* The native input only supplies the picker popup (anchored under the Custom
+   button) and the stored value; the Custom button is the accessible control. */
+.cursor-colour-native {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}

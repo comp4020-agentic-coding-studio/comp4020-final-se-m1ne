@@ -3,6 +3,7 @@ import { rgbToHex } from "./colour.js";
 import { initColourPicker } from "./colour-picker-ui.js";
 import { compositeOverWhite } from "./sampling.js";
 import { wireHelpPopover } from "./help-popover.js";
+import { initCursorColourPicker } from "./cursor-colour-picker.js";
 import { installNavigationMarking, isNavigating, markNavigating, releasePreviousLease } from "./presence-handoff.js";
 import {
   DOCUMENT_WIDTH,
@@ -51,6 +52,11 @@ const profileSaveButton = document.getElementById("profile-save-button");
 const guestSetupOverlay = document.getElementById("guest-setup-overlay");
 const guestSetupNicknameInput = document.getElementById("guest-setup-nickname-input");
 const guestSetupColourInput = document.getElementById("guest-setup-colour-input");
+const profileColourPicker = initCursorColourPicker(document.getElementById("profile-colour-picker"), profileColourInput);
+const guestSetupColourPicker = initCursorColourPicker(
+  document.getElementById("guest-setup-colour-picker"),
+  guestSetupColourInput,
+);
 const guestSetupConfirmButton = document.getElementById("guest-setup-confirm");
 const remoteCursorsContainer = document.getElementById("remote-cursors");
 const remoteStrokePreviewCanvas = document.getElementById("remote-stroke-preview");
@@ -602,7 +608,7 @@ async function saveProfile(nickname, cursorColor) {
 // always sets one, so it is never shown again afterward.
 function maybeShowGuestSetup() {
   if (myNickname !== null) return;
-  guestSetupColourInput.value = myCursorColor;
+  guestSetupColourPicker.setValue(myCursorColor);
   guestSetupOverlay.hidden = false;
 }
 
@@ -616,7 +622,7 @@ guestSetupConfirmButton.addEventListener("click", async () => {
 
 function openProfilePopover() {
   profileNicknameInput.value = myNickname ?? "";
-  profileColourInput.value = myCursorColor;
+  profileColourPicker.setValue(myCursorColor);
   profileShowNicknameInput.checked = profilePrefs.showNickname;
   profileShowCursorInput.checked = profilePrefs.showCursor;
   profileShowOthersInput.checked = profilePrefs.showOthersCursors;

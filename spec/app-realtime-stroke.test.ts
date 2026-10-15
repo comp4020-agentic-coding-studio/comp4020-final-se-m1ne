@@ -434,3 +434,22 @@ describe("Part 2: no theme switching", () => {
     expect(document.getElementById("room-background-select")).toBeNull();
   });
 });
+
+describe("cursor colour selector in the editor", () => {
+  it("the Profile popover and first-run dialog both render the presets and Custom, reflecting the saved colour", async () => {
+    await bootAppForTest(posted);
+    for (const id of ["profile-colour-picker", "guest-setup-colour-picker"]) {
+      const picker = document.getElementById(id)!;
+      expect(picker.querySelectorAll(".cursor-swatch")).toHaveLength(6);
+      expect(picker.querySelector(".cursor-custom-button")!.textContent).toContain("Custom");
+      // the mocked /api/me cursorColor (#1e88e5) is not a preset, so Custom is selected
+      expect(picker.querySelector(".cursor-custom-button")!.classList.contains("is-selected")).toBe(true);
+    }
+    document.getElementById("profile-button")!.dispatchEvent(new Event("click", { bubbles: true }));
+    const picker = document.getElementById("profile-colour-picker")!;
+    const swatch = picker.querySelectorAll<HTMLButtonElement>(".cursor-swatch")[1];
+    swatch.dispatchEvent(new Event("click", { bubbles: true }));
+    expect((document.getElementById("profile-colour-input") as HTMLInputElement).value).toBe("#e8b967");
+    expect(swatch.classList.contains("is-selected")).toBe(true);
+  });
+});
