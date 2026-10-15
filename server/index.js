@@ -31,6 +31,39 @@ const PORT = process.env.PORT ?? 8080;
 const app = express();
 app.use(express.json());
 
+// Audit log: one line per join/draw/erase/undo/redo request, to stdout (Fly.io app logs).
+// Logs only a shortened guest id, room scope, action, result -- never cookies, bodies, or points.
+const AUDIT_ACTION_ROUTE = /^\/api\/(?:(?:ops|pixels)\/|rooms\/([^/]+)\/(?:(?:ops|pixels)\/)?)(draw|erase|undo|redo)$/;
+const AUDIT_JOIN_ROUTE = /^\/api\/(?:(?:ops|pixels)|rooms\/([^/]+)\/(?:ops|pixels))\/stream$/;
+
+function auditGuest(req, res) {
+  const cookieId = /(?:^|;\s*)anon_id=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
+  const setCookie = String(res.getHeader("set-cookie") ?? "");
+  const id = cookieId ?? /anon_id=([^;]+)/.exec(setCookie)?.[1];
+  return id ? id.slice(0, 8) : "unknown";
+}
+
+function audit(req, res, roomCode, action) {
+  const room = roomCode ? roomCode.toUpperCase() : "public";
+  const result = res.statusCode < 400 ? "allowed" : "denied";
+  console.info(`[AUDIT] guest=${auditGuest(req, res)} room=${room} action=${action} result=${result} status=${res.statusCode}`);
+}
+
+app.use((req, res, next) => {
+  if (req.method === "POST") {
+    const match = AUDIT_ACTION_ROUTE.exec(req.path);
+    if (match) res.on("finish", () => audit(req, res, match[1], match[2]));
+  } else if (req.method === "GET") {
+    const match = AUDIT_JOIN_ROUTE.exec(req.path);
+    if (match) {
+      next();
+      audit(req, res, match[1], "join");
+      return;
+    }
+  }
+  next();
+});
+
 // Page routes -- registered before express.static so each wins over that
 // middleware's own default "serve index.html for a directory request"
 // behaviour at "/" (Express tries handlers in registration order; the first
