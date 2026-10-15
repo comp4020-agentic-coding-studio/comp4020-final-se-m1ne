@@ -340,7 +340,9 @@ function rebuildAllLayers() {
     // mask, and once persistence did land it'd render clipped away to
     // nothing on the very next ops-driven repaint.
     for (const op of pendingOps) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape);
-    if (current) {
+    // A shape in progress is not artwork yet: it lives only on the preview overlay until pointer-up
+    // commits it (endGesture), so a rebuild must not paint it into the layer.
+    if (current && !current.shape) {
       renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, current.points);
       currentLastRenderedIndex = current.points.length - 1;
     }
@@ -463,7 +465,9 @@ function repaintVisibleCanvas(region) {
     for (const op of pendingOps) {
       renderPathOnLayer(ctx, "draw", op.color, op.size, op.points, op.shape);
     }
-    if (current && current.kind === "draw") {
+    // Same rule as rebuildAllLayers: an unfinished shape is previewed on the overlay only. Painting its
+    // two defining corners here as a freehand polyline would stamp a stray diagonal onto the real canvas.
+    if (current && current.kind === "draw" && !current.shape) {
       renderPathOnLayer(ctx, "draw", current.color, current.size, current.points);
     }
   }
@@ -1595,11 +1599,27 @@ let zoom = 1;
 // <canvas> whose entire box must match #canvas's pixel-for-pixel for a
 // normalized point painted into it to land on the same screen pixel.
 function positionRemoteStrokePreview() {
-  remoteStrokePreviewCanvas.style.left = `${canvas.offsetLeft}px`;
-  remoteStrokePreviewCanvas.style.top = `${canvas.offsetTop}px`;
-  remoteStrokePreviewCanvas.style.width = `${canvas.clientWidth}px`;
-  remoteStrokePreviewCanvas.style.height = `${canvas.clientHeight}px`;
+  // The canvas is centred in a flex viewport, so its offset changes whenever the layout does (window
+  // resize, a scrollbar appearing, the toolbar row settling) -- not only when zoom changes. Read the
+  // fractional box (offset* and client* round to whole pixels, which left a sub-pixel error after Fit)
+  // so the overlay always covers exactly the same screen rectangle as the canvas.
+  const viewportRect = canvasViewport.getBoundingClientRect();
+  const canvasRect = canvas.getBoundingClientRect();
+  remoteStrokePreviewCanvas.style.left = `${canvasRect.left - viewportRect.left + canvasViewport.scrollLeft - canvasViewport.clientLeft}px`;
+  remoteStrokePreviewCanvas.style.top = `${canvasRect.top - viewportRect.top + canvasViewport.scrollTop - canvasViewport.clientTop}px`;
+  remoteStrokePreviewCanvas.style.width = `${canvasRect.width}px`;
+  remoteStrokePreviewCanvas.style.height = `${canvasRect.height}px`;
 }
+
+// Re-sync whenever the canvas or its viewport changes size or position for ANY reason. ResizeObserver
+// fires on layout changes (window resize, toolbar/scrollbar changes, zoom); the window resize listener
+// covers the canvas re-centring without its own size changing.
+if (typeof ResizeObserver === "function") {
+  const ro = new ResizeObserver(positionRemoteStrokePreview);
+  ro.observe(canvas);
+  ro.observe(canvasViewport);
+}
+window.addEventListener("resize", positionRemoteStrokePreview);
 
 function applyZoom(nextZoom) {
   zoom = clampZoom(nextZoom);
