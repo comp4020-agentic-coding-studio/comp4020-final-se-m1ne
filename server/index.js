@@ -1301,6 +1301,22 @@ app.post("/api/presence/heartbeat", (req, res) => {
   res.status(200).json({ ok: true, ...counts });
 });
 
+// Same-site navigation handoff: the destination page has already registered
+// its own lease, so releasing the previous page's lease (Public or a room's)
+// can no longer drop the guest from "Online Now". `from` is "public" or a
+// room code; the lease is addressed by presenceId exactly like the leave routes.
+app.post("/api/presence/handoff", (req, res) => {
+  const { from, presenceId } = req.body ?? {};
+  if (typeof presenceId !== "string" || presenceId.length === 0 || typeof from !== "string" || from.length === 0) {
+    res.status(400).json({ error: "handoff requires from and presenceId" });
+    return;
+  }
+  if (from === "public") leavePublicPresence(presenceId);
+  else leavePresence(normalizeRoomCode(from), presenceId);
+  const counts = broadcastOnlineCounts();
+  res.status(200).json({ ok: true, ...counts });
+});
+
 app.post("/api/presence/leave", (req, res) => {
   const { presenceId } = req.body ?? {};
   if (typeof presenceId !== "string" || presenceId.length === 0) {

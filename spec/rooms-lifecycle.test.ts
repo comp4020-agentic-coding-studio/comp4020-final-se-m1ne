@@ -403,6 +403,34 @@ describe("Public Canvas presence (Online Now counter)", () => {
     expect(db.countOnlineNow(t0)).toBe(1);
   });
 
+  it("navigation handoff: registering the new lease before releasing the old one never dips the count", () => {
+    const t0 = 104_000_000;
+    const owner = randomUUID();
+    const oldLease = randomUUID();
+    const newLease = randomUUID();
+    db.recordPublicHeartbeat(oldLease, owner, t0);
+    expect(db.countOnlineNow(t0)).toBe(1);
+
+    db.recordPublicHeartbeat(newLease, owner, t0 + 100); // destination page registers first
+    expect(db.countOnlineNow(t0 + 100)).toBe(1);
+    db.leavePublicPresence(oldLease); // then the previous lease is released
+    expect(db.countOnlineNow(t0 + 100)).toBe(1);
+  });
+
+  it("closing one of several tabs of the same guest keeps that guest counted; closing the last removes them immediately", () => {
+    const t0 = 105_000_000;
+    const owner = randomUUID();
+    const tabA = randomUUID();
+    const tabB = randomUUID();
+    db.recordPublicHeartbeat(tabA, owner, t0);
+    db.recordPublicHeartbeat(tabB, owner, t0);
+
+    db.leavePublicPresence(tabA);
+    expect(db.countOnlineNow(t0)).toBe(1);
+    db.leavePublicPresence(tabB);
+    expect(db.countOnlineNow(t0)).toBe(0);
+  });
+
   it("a lease older than STALE_TIMEOUT_MS no longer counts as online (and is pruned by the next heartbeat)", () => {
     const t0 = 104_000_000;
     const stalePresenceId = randomUUID();

@@ -6,6 +6,7 @@
 // making the background secretly interactive).
 import { createPublicCanvasRenderer } from "./landing-canvas.js";
 import { renderAboutContent } from "./about-content.js";
+import { installNavigationMarking, isNavigating, markNavigating, releasePreviousLease } from "./presence-handoff.js";
 
 const canvas = document.getElementById("landing-canvas");
 const enterButton = document.getElementById("enter-canvas-button");
@@ -98,10 +99,11 @@ async function sendHeartbeat() {
   }
 }
 
-function startPresence() {
+async function startPresence() {
   presenceId = crypto.randomUUID();
-  sendHeartbeat();
   heartbeatHandle = setInterval(sendHeartbeat, PRESENCE_HEARTBEAT_INTERVAL_MS);
+  await sendHeartbeat();
+  releasePreviousLease(presenceId);
 }
 
 // Best-effort proactive leave on navigation/tab close -- sendBeacon (not
@@ -112,7 +114,7 @@ function startPresence() {
 // stale (STALE_TIMEOUT_MS, server/db.js) is still the correctness fallback if
 // this never fires at all -- a closed tab, a crash, a lost network.
 function leavePresenceBestEffort() {
-  if (!presenceId || typeof navigator.sendBeacon !== "function") return;
+  if (!presenceId || isNavigating() || typeof navigator.sendBeacon !== "function") return;
   try {
     navigator.sendBeacon("/api/presence/leave", new Blob([JSON.stringify({ presenceId })], { type: "application/json" }));
   } catch {
@@ -125,6 +127,7 @@ function leavePresenceBestEffort() {
 }
 
 window.addEventListener("pagehide", leavePresenceBestEffort);
+installNavigationMarking(() => (presenceId ? { scope: "public", presenceId } : null));
 
 // --- Enter Canvas / guest onboarding -----------------------------------------
 // Reuses the exact same server-side guest profile GET /api/me's nickname
@@ -133,6 +136,7 @@ window.addEventListener("pagehide", leavePresenceBestEffort);
 // safety net for anyone who lands on /canvas directly without ever visiting
 // this page at all.
 function goToCanvas() {
+  markNavigating("public", presenceId);
   location.href = "/canvas";
 }
 

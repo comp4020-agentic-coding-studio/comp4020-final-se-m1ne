@@ -3,6 +3,7 @@ import { rgbToHex } from "./colour.js";
 import { initColourPicker } from "./colour-picker-ui.js";
 import { compositeOverWhite } from "./sampling.js";
 import { wireHelpPopover } from "./help-popover.js";
+import { installNavigationMarking, isNavigating, markNavigating, releasePreviousLease } from "./presence-handoff.js";
 import {
   DOCUMENT_WIDTH,
   DOCUMENT_HEIGHT,
@@ -1538,6 +1539,7 @@ async function startPresence() {
   if (ok && heartbeatHandle === null) {
     heartbeatHandle = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
   }
+  if (ok) releasePreviousLease(presenceId);
 }
 
 function stopPresence() {
@@ -1570,10 +1572,11 @@ async function sendPublicHeartbeat() {
   }
 }
 
-function startPublicPresence() {
+async function startPublicPresence() {
   presenceId = crypto.randomUUID();
-  sendPublicHeartbeat();
   heartbeatHandle = setInterval(sendPublicHeartbeat, HEARTBEAT_INTERVAL_MS);
+  await sendPublicHeartbeat();
+  releasePreviousLease(presenceId);
 }
 
 // Best-effort proactive leave on navigation/tab close -- sendBeacon, same
@@ -1581,7 +1584,7 @@ function startPublicPresence() {
 // an explicit JSON content type, since fetch may not survive an unloading
 // page and sendBeacon's own default content type isn't JSON).
 function leavePublicPresenceBestEffort() {
-  if (!presenceId || typeof navigator.sendBeacon !== "function") return;
+  if (!presenceId || isNavigating() || typeof navigator.sendBeacon !== "function") return;
   try {
     navigator.sendBeacon("/api/presence/leave", new Blob([JSON.stringify({ presenceId })], { type: "application/json" }));
   } catch {
@@ -1597,15 +1600,10 @@ function leavePublicPresenceBestEffort() {
 // network -- none of which can run this at all).
 async function leaveRoom() {
   stopPresence();
-  try {
-    await fetch(`/api/rooms/${roomCode}/leave`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ presenceId }),
-    });
-  } catch {
-    // Best-effort, see above.
-  }
+  // The Public page releases this room lease (POST /api/presence/handoff)
+  // only after it has registered its own, so Online Now never dips; the room's
+  // empty_since is still set by that release.
+  markNavigating(roomCode, presenceId);
   // "/" is the landing page now (public/landing.html) -- returning from a
   // Private Room must enter the Public editor directly, not the landing page.
   location.href = "/canvas";
@@ -1633,15 +1631,20 @@ if (isPublicCanvas) {
     // tab ever heartbeating it again). The room page reads and immediately
     // scrubs it (see the pid handling below), so it never persists in the
     // visible URL, bookmarks, or history.
+    markNavigating("public", presenceId);
     location.href = `/room/${code}?pid=${encodeURIComponent(newPresenceId)}`;
   });
   joinRoomForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const code = joinRoomCodeInput.value.trim().toUpperCase();
-    if (code) location.href = `/room/${code}`;
+    if (code) {
+      markNavigating("public", presenceId);
+      location.href = `/room/${code}`;
+    }
   });
 
   window.addEventListener("pagehide", leavePublicPresenceBestEffort);
+  installNavigationMarking(() => (presenceId ? { scope: "public", presenceId } : null));
   startPublicPresence();
 } else {
   publicRoomControls.hidden = true;
@@ -1670,6 +1673,15 @@ if (isPublicCanvas) {
     if (!leaveRoomOverlay.hidden && event.key === "Escape") closeLeaveRoomDialog();
   });
 
+  window.addEventListener("pagehide", () => {
+    if (!presenceId || isNavigating() || typeof navigator.sendBeacon !== "function") return;
+    try {
+      navigator.sendBeacon(`/api/rooms/${roomCode}/leave`, new Blob([JSON.stringify({ presenceId })], { type: "application/json" }));
+    } catch {
+      // best-effort
+    }
+  });
+  installNavigationMarking(() => (presenceId ? { scope: roomCode, presenceId } : null));
   startPresence();
 }
 

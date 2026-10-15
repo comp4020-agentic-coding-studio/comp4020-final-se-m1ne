@@ -29,6 +29,7 @@ import { fadeOpacity } from "./fade.js";
 import { hexToRgb, rgbToHex } from "./colour.js";
 import { initColourPicker } from "./colour-picker-ui.js";
 import { compositeOverWhite } from "./sampling.js";
+import { installNavigationMarking, isNavigating, markNavigating, releasePreviousLease } from "./presence-handoff.js";
 import { wireHelpPopover } from "./help-popover.js";
 import { replayPixelOps, cellsForStroke, cellKey } from "./pixelgrid.js";
 import { cursorDiameterCssPx, fitZoom, stepZoom, clampZoom } from "./viewport.js";
@@ -985,6 +986,7 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
     if (ok && heartbeatHandle === null) {
       heartbeatHandle = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
     }
+    if (ok) releasePreviousLease(presenceId);
   }
   function stopPresence() {
     if (heartbeatHandle !== null) {
@@ -995,15 +997,8 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
 
   async function leaveRoom() {
     stopPresence();
-    try {
-      await fetch(`/api/rooms/${roomCode}/leave`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ presenceId }),
-      });
-    } catch {
-      // Best-effort; the heartbeat simply stopping is still the correctness fallback.
-    }
+    // Released by the Public page's handoff once it has registered its own lease.
+    markNavigating(roomCode, presenceId);
     // "/" is the landing page now (public/landing.html) -- returning from a
     // Private Room must enter the Public editor directly, not the landing page.
     location.href = "/canvas";
@@ -1190,6 +1185,15 @@ function bootPixelEditor(gridWidth, gridHeight, initialBackground) {
       if (!leaveRoomOverlay.hidden && event.key === "Escape") closeLeaveRoomDialog();
     });
 
+    window.addEventListener("pagehide", () => {
+      if (!presenceId || isNavigating() || typeof navigator.sendBeacon !== "function") return;
+      try {
+        navigator.sendBeacon(`/api/rooms/${roomCode}/leave`, new Blob([JSON.stringify({ presenceId })], { type: "application/json" }));
+      } catch {
+        // best-effort
+      }
+    });
+    installNavigationMarking(() => (presenceId ? { scope: roomCode, presenceId } : null));
     startPresence();
   }
 

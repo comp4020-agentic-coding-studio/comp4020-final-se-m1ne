@@ -259,3 +259,17 @@ it("a heartbeat's totalVisitors is numeric and never decreases across sequential
   const after = await postJson("/api/presence/heartbeat", { presenceId: crypto.randomUUID() });
   expect(after.body.totalVisitors).toBeGreaterThanOrEqual(before.body.totalVisitors); // a monotonic counter: it can be bumped by unrelated concurrent tests, but never goes backwards
 });
+
+it("/api/presence/handoff requires from and presenceId, and releases only the named lease", async () => {
+  expect((await postJson("/api/presence/handoff", {})).status).toBe(400);
+  expect((await postJson("/api/presence/handoff", { from: "public" })).status).toBe(400);
+
+  const oldLease = crypto.randomUUID();
+  const newLease = crypto.randomUUID();
+  const first = await postJson("/api/presence/heartbeat", { presenceId: oldLease });
+  const cookie = first.cookie;
+  await postJson("/api/presence/heartbeat", { presenceId: newLease }, cookie);
+  const handoff = await postJson("/api/presence/handoff", { from: "public", presenceId: oldLease }, cookie);
+  expect(handoff.status).toBe(200);
+  expect(handoff.body.onlineCount).toBeGreaterThanOrEqual(1); // same guest still has the new lease
+});
