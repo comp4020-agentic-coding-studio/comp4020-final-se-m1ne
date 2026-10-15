@@ -751,8 +751,10 @@ export function recordPublicHeartbeat(presenceId, ownerId, now = Date.now()) {
 // the same role leavePresence plays for rooms; the lease simply going stale
 // is still the correctness fallback for a closed tab, a crash, or a lost
 // network.
-export function leavePublicPresence(presenceId) {
-  deleteOnePresenceStmt.run(PUBLIC_PRESENCE_SCOPE, presenceId);
+export function leavePublicPresence(presenceId, now = Date.now()) {
+  db.prepare(
+    "UPDATE presence SET last_seen = MIN(last_seen, ?) WHERE room_id = ? AND presence_id = ?"
+  ).run(now - STALE_TIMEOUT_MS + 5_000, PUBLIC_PRESENCE_SCOPE, presenceId);
 }
 
 // --- Guest nickname (cosmetic display metadata, never an authority) --------
