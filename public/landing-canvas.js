@@ -24,6 +24,7 @@ import { DOCUMENT_WIDTH, DOCUMENT_HEIGHT, documentPointToPixel, brushSizeToDocum
 import { effectiveOpacity } from "./fade.js";
 import { paintShape } from "./shapes.js";
 import { paintFill, paintFillRing } from "./floodfill.js";
+import { paintAirbrush } from "./airbrush.js";
 
 function toPixels(point) {
   return documentPointToPixel(point, DOCUMENT_WIDTH, DOCUMENT_HEIGHT);
@@ -34,6 +35,10 @@ function toPixels(point) {
 // kept in lockstep deliberately, so this preview can never visibly diverge
 // from how the same op renders in the real, interactive editor.
 function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points, shape, part) {
+  if (shape && shape.type === "airbrush" && kind !== "erase") {
+    paintAirbrush(layerCtx, color, sizeNormalized, points, DOCUMENT_WIDTH, DOCUMENT_HEIGHT, part);
+    return;
+  }
   if (shape && shape.type === "fill") {
     // core = the spans the flood found; ring = the fixed 1px expansion (see floodfill.js); both = mask coverage
     if (part !== "core") paintFillRing(layerCtx, color, shape.runs, DOCUMENT_WIDTH, DOCUMENT_HEIGHT);
@@ -117,7 +122,7 @@ export function createPublicCanvasRenderer(canvas) {
     layers = new Map();
     for (const [ownerId, ops] of groupByOwner(allOps)) {
       const layer = ensureLayer(ownerId);
-      for (const op of ops) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape);
+      for (const op of ops) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape, "mask");
     }
   }
 
@@ -173,7 +178,7 @@ export function createPublicCanvasRenderer(canvas) {
     allOps.push(op);
     allOps.sort(bySeq);
     const layer = ensureLayer(op.ownerId);
-    renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape);
+    renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape, "mask");
     repaint();
   }
 
@@ -187,7 +192,7 @@ export function createPublicCanvasRenderer(canvas) {
     const layer = ensureLayer(op.ownerId);
     layer.ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
     const remaining = allOps.filter((existing) => existing.ownerId === op.ownerId);
-    for (const existing of remaining) renderPathOnLayer(layer.ctx, existing.kind, existing.color, existing.size, existing.points, existing.shape);
+    for (const existing of remaining) renderPathOnLayer(layer.ctx, existing.kind, existing.color, existing.size, existing.points, existing.shape, "mask");
     repaint();
   }
 

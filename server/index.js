@@ -215,6 +215,11 @@ function normalizeShape(shape, points) {
     if (!Array.isArray(points) || points.length !== 1 || !isPoint(points[0])) return null;
     return isValidFillRuns(shape.runs, DOCUMENT_WIDTH, DOCUMENT_HEIGHT) ? { type: "fill", runs: shape.runs } : null;
   }
+  if (shape && shape.type === "airbrush") {
+    // Airbrush: an ordinary freehand path (any number of points) painted with a soft edge; no extra data.
+    if (!pointsValid(points) || !points.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) return null;
+    return { type: "airbrush" };
+  }
   if (!isValidShapeDescriptor(shape)) return null;
   if (!Array.isArray(points) || points.length !== 2) return null;
   for (const p of points) {

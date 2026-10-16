@@ -6,6 +6,7 @@ import { wireHelpPopover } from "./help-popover.js";
 import { initCursorColourPicker } from "./cursor-colour-picker.js";
 import { constrainCorner, isMeaningfulShape, paintShape } from "./shapes.js";
 import { floodFillRuns, paintFill, paintFillRing, fillRunsBounds } from "./floodfill.js";
+import { paintAirbrush, AIRBRUSH_SHAPE } from "./airbrush.js";
 import { installNavigationMarking, isNavigating, markNavigating, releasePreviousLease } from "./presence-handoff.js";
 import {
   DOCUMENT_WIDTH,
@@ -42,6 +43,7 @@ const shapeModeButtons = {
   outline: document.getElementById("shape-mode-outline"),
   filled: document.getElementById("shape-mode-filled"),
 };
+const toolAirbrushButton = document.getElementById("tool-airbrush");
 const toolEyedropperButton = document.getElementById("tool-eyedropper");
 const toolFillButton = document.getElementById("tool-fill");
 const colourGroup = document.getElementById("colour-group");
@@ -213,7 +215,7 @@ const toolSizes = {
 };
 // Every shape tool uses the Brush size as its stroke width -- the same
 // variable and range, so switching Brush <-> a shape never changes the number.
-for (const id of ["line", "rectangle", "ellipse"]) toolSizes[id] = toolSizes.brush;
+for (const id of ["line", "rectangle", "ellipse", "airbrush"]) toolSizes[id] = toolSizes.brush;
 
 // Applies the active tool's own range and current value to the one shared
 // slider -- called on every tool switch so min/max/value/display all update
@@ -355,7 +357,12 @@ function ensureScratch() {
 // path for both draw and erase, in every situation.
 // `part` only matters for a Paint Bucket op: "core" = the spans the flood found, "ring" = the fixed 1px
 // expansion around them, undefined = both (the full coverage an owner layer mask needs). Others ignore it.
-function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points, shape, part) {
+function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points, shape, part, win) {
+  if (shape && shape.type === "airbrush" && kind !== "erase") {
+    // Soft-edge stroke: alpha is a deterministic function of distance to the path (see airbrush.js).
+    paintAirbrush(layerCtx, color, sizeNormalized, points, DOCUMENT_WIDTH, DOCUMENT_HEIGHT, part, win);
+    return;
+  }
   if (shape && shape.type === "fill") {
     // Paint Bucket op: replays the exact pixel spans it filled when it was made (never re-samples anything).
     if (part !== "core") paintFillRing(layerCtx, color, shape.runs, DOCUMENT_WIDTH, DOCUMENT_HEIGHT);
@@ -400,7 +407,7 @@ function rebuildLayerFromOps(ownerId, layerId) {
   layer.canvas.width = canvas.width;
   layer.canvas.height = canvas.height;
   const ops = (opsByOwner.get(ownerId) ?? []).filter((op) => effectiveLayerId(op, isPublicCanvas) === layerId);
-  for (const op of ops) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape);
+  for (const op of ops) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape, "mask");
 }
 
 // Every distinct (ownerId, layerId) pair actually present in allOps -- driven
@@ -431,13 +438,13 @@ function rebuildAllLayers() {
     // between one finished-but-unconfirmed gesture and the next.
     for (const op of pendingOps) {
       const layer = ensureLayer(myOwnerId, effectiveLayerId(op, isPublicCanvas));
-      renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape);
+      renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape, "mask");
     }
     // A shape in progress is not artwork yet: it lives only on the preview overlay until pointer-up
     // commits it (endGesture), so a rebuild must not paint it into the layer.
     if (current && !current.shape) {
       const layer = ensureLayer(myOwnerId, current.layerId);
-      renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, current.points);
+      renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, current.points, current.airbrush ? AIRBRUSH_SHAPE : undefined, "mask");
       currentLastRenderedIndex = current.points.length - 1;
     }
   }
@@ -594,10 +601,11 @@ function repaintVisibleCanvas(region) {
   // Unmasked live content (never clipped by an owner layer mask: nothing erases it until it is committed).
   // Its points keep growing while it is live, so its bounds are computed fresh (opPixelBounds caches).
   const compositeLive = (item, part) => {
-    const bounds = opPixelBounds({ points: item.points, size: item.size, shape: item.shape });
+    const shape = item.shape ?? (item.airbrush ? AIRBRUSH_SHAPE : undefined);
+    const bounds = opPixelBounds({ points: item.points, size: item.size, shape });
     if (clipRect && !rectsIntersect(bounds, clipRect)) return;
     beginScratch(1);
-    renderPathOnLayer(scratchCtx, "draw", item.color, item.size, item.points, item.shape, part);
+    renderPathOnLayer(scratchCtx, "draw", item.color, item.size, item.points, shape, part, clipRect ?? undefined);
     scratchCtx.restore();
     blitScratch();
   };
@@ -617,7 +625,7 @@ function repaintVisibleCanvas(region) {
       const ownerLayer = masked ? layers.get(ownerLayerKey(op.ownerId, layerId)) : null;
       if (masked && !ownerLayer) return;
       beginScratch(opacity);
-      renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points, op.shape, part);
+      renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points, op.shape, part, clipRect ?? undefined);
       scratchCtx.restore(); // back to the untransformed, default state for the mask step
       if (masked) {
         scratchCtx.globalAlpha = 1;
@@ -1185,7 +1193,7 @@ async function sendStrokePreview(force) {
         size: current.size,
         points: current.points,
         layerId: current.layerId,
-        ...(current.shape ? { shape: current.shape } : {}),
+        ...(current.shape ? { shape: current.shape } : current.airbrush ? { shape: AIRBRUSH_SHAPE } : {}),
       }),
     });
   } catch {
@@ -1511,7 +1519,13 @@ function renderCurrentDelta() {
   if (!current || myOwnerId === null) return;
   const layer = ensureLayer(myOwnerId, current.layerId);
   const delta = current.points.slice(currentLastRenderedIndex);
-  renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, delta);
+  if (current.airbrush) {
+    // The owner layer only holds the stroke's hard footprint (what an erase can later remove); the soft alpha is
+    // composited from `current` itself by repaintVisibleCanvas. Only the new delta is added, so a long stroke stays cheap.
+    renderPathOnLayer(layer.ctx, "draw", current.color, current.size, delta, AIRBRUSH_SHAPE, "mask");
+  } else {
+    renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, delta);
+  }
   currentLastRenderedIndex = current.points.length - 1;
   // Never painted straight onto the visible canvas: a regional, layer-ordered repaint composites this
   // stroke (draw: from `current`; erase: through the owner's mask) at its own layer's position. Only the
@@ -1576,6 +1590,7 @@ function beginGesture(kind, point) {
     size: (kind === "erase" ? eraserSizePx : brushSizePx) / canvas.width,
     points: [point],
     layerId: layerSettings.selected,
+    ...(kind === "draw" && mode === "airbrush" ? { airbrush: true } : {}),
   };
   currentLastRenderedIndex = 0;
   renderCurrentDelta();
@@ -1937,6 +1952,7 @@ function endGesture() {
   sendStrokePreview(true);
   if (current.kind === "erase") reconcileEraseMask();
   const finished = current;
+  if (finished.airbrush) finished.shape = AIRBRUSH_SHAPE; // from here on it is an ordinary draw op with a shape descriptor
   current = null;
   // Tells every other viewer this stroke is no longer in progress, whether or
   // not persistGesture's own save (below) goes on to succeed -- see
@@ -2077,7 +2093,7 @@ canvas.addEventListener("pointerdown", (event) => {
     return;
   }
   gesturePointerId = event.pointerId;
-  beginGesture(mode === "eraser" ? "erase" : "draw", pointerPos(event));
+  beginGesture(mode === "eraser" ? "erase" : "draw", pointerPos(event)); // the Airbrush is a "draw" gesture flagged in beginGesture
 });
 
 canvas.addEventListener("pointermove", (event) => {
@@ -2176,6 +2192,8 @@ function setMode(newMode) {
   if (current && current.shape) cancelShapeGesture(); // switching tools mid-shape drops the preview
   mode = newMode;
   toolBrushButton.classList.toggle("selected", mode === "brush");
+  toolAirbrushButton.classList.toggle("selected", mode === "airbrush");
+  toolAirbrushButton.setAttribute("aria-pressed", String(mode === "airbrush"));
   toolEraserButton.classList.toggle("selected", mode === "eraser");
   for (const id of SHAPE_TOOL_IDS) {
     shapeToolButtons[id].classList.toggle("selected", mode === id);
@@ -2206,6 +2224,7 @@ function setMode(newMode) {
 }
 
 toolBrushButton.addEventListener("click", () => setMode("brush"));
+toolAirbrushButton.addEventListener("click", () => setMode("airbrush"));
 toolEraserButton.addEventListener("click", () => setMode("eraser"));
 for (const id of SHAPE_TOOL_IDS) shapeToolButtons[id].addEventListener("click", () => setMode(id));
 toolFillButton.addEventListener("click", () => setMode("fill"));

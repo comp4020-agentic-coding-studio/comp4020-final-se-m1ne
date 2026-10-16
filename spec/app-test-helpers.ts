@@ -100,7 +100,7 @@ function makeStubContext() {
     createLinearGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
     getImageData: vi.fn((_x?: number, _y?: number, w = 1, h = 1) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h })),
     putImageData: vi.fn(),
-    createImageData: vi.fn(() => ({ data: new Uint8ClampedArray(4) })),
+    createImageData: vi.fn((w = 1, h = 1) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h })),
     strokeStyle: "",
     fillStyle: "",
     lineWidth: 0,
