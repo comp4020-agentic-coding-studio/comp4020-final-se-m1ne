@@ -1953,6 +1953,36 @@ loadMe().then(() => {
   maybeShowGuestSetup();
 });
 
+// A draw op's fade opacity quantized to the canvas's own 8-bit alpha
+// resolution (Uint8ClampedArray) -- repainting again before this changes
+// would composite the exact same pixels, so it's the cheap (pure arithmetic,
+// no canvas work) test the fade tick below uses to decide whether a real
+// repaint is even needed. Cached onto the op object itself as
+// _lastPaintedFadeQuant, the same memoization style opNormalizedBounds
+// already uses, so it's invalidated for free whenever allOps is replaced by a
+// fresh sync/loadOps array of brand-new op objects.
+function fadeQuantizedOpacity(op, now) {
+  return Math.round(effectiveOpacity(op, now, isPublicCanvas) * 255);
+}
+
+// True only if some draw op's visible fade level has actually moved since
+// the last real repaint -- never approximates the repaint itself (that still
+// always runs with the exact, unquantized opacity), only whether one is due.
+function publicFadeNeedsRepaint(now) {
+  for (const op of allOps) {
+    if (op.kind !== "draw") continue;
+    if (op._lastPaintedFadeQuant !== fadeQuantizedOpacity(op, now)) return true;
+  }
+  return false;
+}
+
+function markFadePainted(now) {
+  for (const op of allOps) {
+    if (op.kind !== "draw") continue;
+    op._lastPaintedFadeQuant = fadeQuantizedOpacity(op, now);
+  }
+}
+
 // Exists solely to animate the Public Canvas's fade -- a Private Room's
 // effectiveOpacity never changes with time, so there is nothing for a
 // from-scratch repaint to pick up between one tick and the next, and running
@@ -1965,9 +1995,22 @@ loadMe().then(() => {
 // is already authoritative for every pixel it touches, and an unrelated full
 // repaint firing mid-drag would only race it for no benefit. Normal fade
 // repaint resumes on the next tick once the gesture ends.
+//
+// publicFadeNeedsRepaint below additionally skips the actual repaint (the
+// expensive part: a full clearRect + per-op scratch composite + drawImage
+// for every op in history) on most of these ticks, since at 2 percentage
+// points per 15 minutes an op's fade only crosses a visible (1/255) boundary
+// roughly every ~3 minutes -- every other tick would otherwise repaint a
+// canvas that looks pixel-identical to the one already on screen. This is
+// what kept a growing op history from turning this 1Hz tick into a
+// recurring main-thread stall (visible as idle cursor stutter) once a public
+// canvas accumulates enough strokes.
 if (isPublicCanvas) {
   setInterval(() => {
     if (current) return;
+    const now = Date.now();
+    if (!publicFadeNeedsRepaint(now)) return;
     repaintVisibleCanvas();
+    markFadePainted(now);
   }, 1000);
 }
