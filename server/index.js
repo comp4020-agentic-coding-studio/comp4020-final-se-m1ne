@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { getOrSetAnonId, readAnonId } from "./anon.js";
 import { isValidShapeDescriptor } from "../public/shapes.js";
 import { layerIdsFor } from "../public/layers.js";
+import { isValidFillRuns } from "../public/floodfill.js";
+import { DOCUMENT_WIDTH, DOCUMENT_HEIGHT } from "../public/viewport.js";
 import {
   abandonRedoBranch,
   countOnlineNow,
@@ -31,7 +33,8 @@ const ROOT = join(__dirname, "..");
 const PORT = process.env.PORT ?? 8080;
 
 const app = express();
-app.use(express.json());
+// 2mb rather than express's 100kb default: a Paint Bucket op carries the pixel spans it filled (see public/floodfill.js).
+app.use(express.json({ limit: "2mb" }));
 
 // Audit log: one line per join/draw/erase/undo/redo request, to stdout (Fly.io app logs).
 // Logs only a shortened guest id, room scope, action, result -- never cookies, bodies, or points.
@@ -207,6 +210,11 @@ function normalizeLayerId(layerId, roomId) {
 // generous range. Returns the normalised descriptor, or null if invalid.
 const SHAPE_COORD_LIMIT = 4; // normalized units; the document is [0,1], a drag may overshoot a little but not absurdly
 function normalizeShape(shape, points) {
+  if (shape && shape.type === "fill") {
+    // Paint Bucket: one seed point plus the exact spans it filled, all inside the fixed document.
+    if (!Array.isArray(points) || points.length !== 1 || !isPoint(points[0])) return null;
+    return isValidFillRuns(shape.runs, DOCUMENT_WIDTH, DOCUMENT_HEIGHT) ? { type: "fill", runs: shape.runs } : null;
+  }
   if (!isValidShapeDescriptor(shape)) return null;
   if (!Array.isArray(points) || points.length !== 2) return null;
   for (const p of points) {

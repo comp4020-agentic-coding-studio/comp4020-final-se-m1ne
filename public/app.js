@@ -1,10 +1,11 @@
 import { effectiveOpacity } from "./fade.js";
-import { rgbToHex } from "./colour.js";
+import { rgbToHex, hexToRgb } from "./colour.js";
 import { initColourPicker } from "./colour-picker-ui.js";
 import { compositeOverWhite } from "./sampling.js";
 import { wireHelpPopover } from "./help-popover.js";
 import { initCursorColourPicker } from "./cursor-colour-picker.js";
 import { constrainCorner, isMeaningfulShape, paintShape } from "./shapes.js";
+import { floodFillRuns, paintFill, fillRunsBounds } from "./floodfill.js";
 import { installNavigationMarking, isNavigating, markNavigating, releasePreviousLease } from "./presence-handoff.js";
 import {
   DOCUMENT_WIDTH,
@@ -42,6 +43,7 @@ const shapeModeButtons = {
   filled: document.getElementById("shape-mode-filled"),
 };
 const toolEyedropperButton = document.getElementById("tool-eyedropper");
+const toolFillButton = document.getElementById("tool-fill");
 const colourGroup = document.getElementById("colour-group");
 const createRoomButton = document.getElementById("create-room-button");
 const joinRoomForm = document.getElementById("join-room-form");
@@ -221,7 +223,7 @@ for (const id of ["line", "rectangle", "ellipse"]) toolSizes[id] = toolSizes.bru
 // left exactly as they were, and whichever one was last shown stays visible
 // but inert underneath the disabled control.
 function syncSizeControlToMode() {
-  if (mode === "eyedropper") {
+  if (mode === "eyedropper" || mode === "fill") {
     toolSizeSlider.disabled = true;
     return;
   }
@@ -352,6 +354,11 @@ function ensureScratch() {
 // gesture (just its newest delta), so there is exactly one rendering code
 // path for both draw and erase, in every situation.
 function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points, shape) {
+  if (shape && shape.type === "fill") {
+    // Paint Bucket op: replays the exact pixel spans it filled when it was made (never re-samples anything).
+    paintFill(layerCtx, color, shape.runs);
+    return;
+  }
   if (shape && points.length === 2) {
     // A shape op: two document-normalised corners + {type, mode}. paintShape
     // is the same code the live preview and remote replay run.
@@ -440,6 +447,10 @@ function rebuildAllLayers() {
 // that produced them don't change; only the pixel conversion below depends
 // on the current canvas size.
 function opNormalizedBounds(op) {
+  if (!op._normBounds && op.shape && op.shape.type === "fill") {
+    const b = fillRunsBounds(op.shape.runs) ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    op._normBounds = { minX: b.minX / DOCUMENT_WIDTH, minY: b.minY / DOCUMENT_HEIGHT, maxX: b.maxX / DOCUMENT_WIDTH, maxY: b.maxY / DOCUMENT_HEIGHT };
+  }
   if (!op._normBounds && op.shape && op.points.length === 2) {
     const [p, q] = op.points;
     // Stroke width is normalized by canvas WIDTH, so the same pixel padding is a larger fraction on y.
@@ -1672,6 +1683,83 @@ function cancelShapeGesture() {
   updateUndoRedoButtons();
 }
 
+// The selected DOCUMENT layer exactly as it looks to this viewer, as pixel data -- every owner's committed
+// draw ops on that layer (owner-masked where an erase applies, faded like the real render) plus this viewer's
+// not-yet-confirmed ops on it. Never the flattened composite of all layers: other layers cannot act as walls.
+function sampleLayerPixels(layerId) {
+  const sampleCanvas = document.createElement("canvas");
+  sampleCanvas.width = canvas.width;
+  sampleCanvas.height = canvas.height;
+  const sctx = sampleCanvas.getContext("2d", { willReadFrequently: true });
+  const erases = erasesByOwnerLayer();
+  const now = Date.now();
+  let masked = null;
+  for (const op of getRenderOrderOps()) {
+    if (op.kind !== "draw" || effectiveLayerId(op, isPublicCanvas) !== layerId) continue;
+    const opacity = effectiveOpacity(op, now, isPublicCanvas);
+    if (opacity <= 0) continue;
+    if (!opNeedsOwnerMask(op, layerId, erases)) {
+      sctx.globalAlpha = opacity;
+      renderPathOnLayer(sctx, "draw", op.color, op.size, op.points, op.shape);
+      sctx.globalAlpha = 1;
+      continue;
+    }
+    const ownerLayer = layers.get(ownerLayerKey(op.ownerId, layerId));
+    if (!ownerLayer) continue;
+    if (!masked) masked = document.createElement("canvas");
+    masked.width = canvas.width;
+    masked.height = canvas.height;
+    const m = masked.getContext("2d");
+    m.globalAlpha = opacity;
+    renderPathOnLayer(m, "draw", op.color, op.size, op.points, op.shape);
+    m.globalAlpha = 1;
+    m.globalCompositeOperation = "destination-in";
+    m.drawImage(ownerLayer.canvas, 0, 0);
+    sctx.drawImage(masked, 0, 0);
+  }
+  for (const op of pendingOps) {
+    if (effectiveLayerId(op, isPublicCanvas) === layerId) renderPathOnLayer(sctx, "draw", op.color, op.size, op.points, op.shape);
+  }
+  return sctx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height);
+}
+
+// Paint Bucket: one click fills the four-connected region of the SELECTED layer under the pointer with the
+// current colour. The computed spans are committed as a normal draw op (shape {type:"fill", runs}) through the
+// same pending -> persist -> SSE path as a shape, so undo/redo, replay, ownership and layer order all apply.
+function fillAt(point) {
+  if (myOwnerId === null || current) return;
+  if (layerSettings.hidden[layerSettings.selected]) {
+    showLayerHiddenNotice();
+    return;
+  }
+  const layerId = layerSettings.selected;
+  const px = toPixels(point);
+  const sx = Math.floor(px.x);
+  const sy = Math.floor(px.y);
+  if (sx < 0 || sy < 0 || sx >= canvas.width || sy >= canvas.height) return; // outside the document
+  const image = sampleLayerPixels(layerId);
+  const seed = (sy * image.width + sx) * 4;
+  const target = hexToRgb(color);
+  // Already exactly this colour (opaque): nothing to change.
+  if (image.data[seed + 3] === 255 && image.data[seed] === target.r && image.data[seed + 1] === target.g && image.data[seed + 2] === target.b) return;
+  const runs = floodFillRuns(image.data, image.width, image.height, sx, sy);
+  if (!runs || runs.length === 0) return; // empty, or too fragmented to store
+  const finishedFill = {
+    kind: "draw",
+    color,
+    size: brushSizePx / canvas.width,
+    points: [point],
+    shape: { type: "fill", runs },
+    layerId,
+  };
+  const layer = ensureLayer(myOwnerId, layerId);
+  renderPathOnLayer(layer.ctx, "draw", finishedFill.color, finishedFill.size, finishedFill.points, finishedFill.shape);
+  pendingOps.push(finishedFill);
+  repaintVisibleCanvas(opPixelBounds(finishedFill));
+  updateUndoRedoButtons();
+  persistGesture(finishedFill);
+}
+
 async function persistGesture(finished) {
   const endpoint = finished.kind === "erase" ? eraseUrl : drawUrl;
   const body =
@@ -1956,6 +2044,11 @@ canvas.addEventListener("pointerdown", (event) => {
     sampleColourAt(pointerPos(event));
     return;
   }
+  if (mode === "fill") {
+    // One-shot like the eyedropper: no pointer capture, no gesture; commits a single fill op directly.
+    fillAt(pointerPos(event));
+    return;
+  }
   canvas.setPointerCapture(event.pointerId);
   if (shapeToolButtons[mode]) {
     shapeShift = event.shiftKey;
@@ -2070,6 +2163,8 @@ function setMode(newMode) {
   // The one Outline/Filled selector shows only for the three closed shapes.
   shapeModeControl.hidden = !(mode === "rectangle" || mode === "ellipse");
   toolEyedropperButton.classList.toggle("selected", mode === "eyedropper");
+  toolFillButton.classList.toggle("selected", mode === "fill");
+  toolFillButton.setAttribute("aria-pressed", String(mode === "fill"));
   toolBrushButton.setAttribute("aria-pressed", String(mode === "brush"));
   toolEraserButton.setAttribute("aria-pressed", String(mode === "eraser"));
   toolEyedropperButton.setAttribute("aria-pressed", String(mode === "eyedropper"));
@@ -2077,7 +2172,7 @@ function setMode(newMode) {
   // native crosshair instead of the circular size-preview overlay Brush/
   // Eraser use (replaced by that overlay via updateCursorSize below).
   // Eyedropper and the shape tools have no circular brush footprint to preview.
-  const crosshairTool = mode === "eyedropper" || Boolean(shapeToolButtons[mode]);
+  const crosshairTool = mode === "eyedropper" || mode === "fill" || Boolean(shapeToolButtons[mode]);
   canvas.style.cursor = crosshairTool ? "crosshair" : "none";
   if (crosshairTool) toolCursor.style.display = "none";
   syncSizeControlToMode();
@@ -2092,6 +2187,7 @@ function setMode(newMode) {
 toolBrushButton.addEventListener("click", () => setMode("brush"));
 toolEraserButton.addEventListener("click", () => setMode("eraser"));
 for (const id of SHAPE_TOOL_IDS) shapeToolButtons[id].addEventListener("click", () => setMode(id));
+toolFillButton.addEventListener("click", () => setMode("fill"));
 
 function setShapeMode(next) {
   shapeMode = next;
@@ -2119,7 +2215,7 @@ function currentToolDiameterPx() {
 }
 
 function updateCursorSize() {
-  if (mode === "eyedropper" || shapeToolButtons[mode]) return; // no diameter to preview -- see setMode's native crosshair instead
+  if (mode === "eyedropper" || mode === "fill" || shapeToolButtons[mode]) return; // no diameter to preview -- see setMode's native crosshair instead
   const diameter = cursorDiameterCssPx(currentToolDiameterPx(), zoom);
   toolCursor.style.width = `${diameter}px`;
   toolCursor.style.height = `${diameter}px`;
@@ -2202,7 +2298,7 @@ function positionToolCursor(clientX, clientY) {
 }
 
 canvas.addEventListener("pointerenter", (event) => {
-  if (mode === "eyedropper" || shapeToolButtons[mode]) return; // crosshair only, no circular overlay
+  if (mode === "eyedropper" || mode === "fill" || shapeToolButtons[mode]) return; // crosshair only, no circular overlay
   updateCursorSize();
   positionToolCursor(event.clientX, event.clientY);
   toolCursor.style.display = "block";

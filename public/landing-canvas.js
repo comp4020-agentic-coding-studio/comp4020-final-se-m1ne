@@ -23,6 +23,7 @@
 import { DOCUMENT_WIDTH, DOCUMENT_HEIGHT, documentPointToPixel, brushSizeToDocumentPx } from "./viewport.js";
 import { effectiveOpacity } from "./fade.js";
 import { paintShape } from "./shapes.js";
+import { paintFill } from "./floodfill.js";
 
 function toPixels(point) {
   return documentPointToPixel(point, DOCUMENT_WIDTH, DOCUMENT_HEIGHT);
@@ -33,6 +34,10 @@ function toPixels(point) {
 // kept in lockstep deliberately, so this preview can never visibly diverge
 // from how the same op renders in the real, interactive editor.
 function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points, shape) {
+  if (shape && shape.type === "fill") {
+    paintFill(layerCtx, color, shape.runs);
+    return;
+  }
   if (shape && points.length === 2) {
     paintShape(
       layerCtx,
