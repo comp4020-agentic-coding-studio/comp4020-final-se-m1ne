@@ -1672,17 +1672,27 @@ zoomInButton.addEventListener("click", () => applyZoom(stepZoom(zoom, ZOOM_LEVEL
 zoomOutButton.addEventListener("click", () => applyZoom(stepZoom(zoom, ZOOM_LEVELS, -1)));
 fitButton.addEventListener("click", applyFit);
 
+// Moves the circular cursor overlay via `transform: translate(...)` only --
+// never left/top -- so the browser can reposition it on the compositor
+// thread alone, with no layout/paint forced on #tool-cursor's `position:
+// fixed` box every pointermove. The trailing `translate(-50%, -50%)`
+// reproduces the exact same centering the CSS rule used to apply on its
+// own (now folded in here since it has to share the transform property with
+// the live position); same final on-screen box, just composited instead of
+// laid out.
+function positionToolCursor(clientX, clientY) {
+  toolCursor.style.transform = `translate(${clientX}px, ${clientY}px) translate(-50%, -50%)`;
+}
+
 canvas.addEventListener("pointerenter", (event) => {
   if (mode === "eyedropper" || shapeToolButtons[mode]) return; // crosshair only, no circular overlay
   updateCursorSize();
-  toolCursor.style.left = `${event.clientX}px`;
-  toolCursor.style.top = `${event.clientY}px`;
+  positionToolCursor(event.clientX, event.clientY);
   toolCursor.style.display = "block";
 });
 
 canvas.addEventListener("pointermove", (event) => {
-  toolCursor.style.left = `${event.clientX}px`;
-  toolCursor.style.top = `${event.clientY}px`;
+  positionToolCursor(event.clientX, event.clientY);
   // Throttled, independent of drawing: broadcasts this tab's own position to
   // every other viewer of this exact document, regardless of which tool is
   // selected or whether a gesture is in progress.

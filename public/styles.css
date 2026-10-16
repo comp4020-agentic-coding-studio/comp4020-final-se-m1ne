@@ -212,13 +212,18 @@ body {
 
 #tool-cursor {
   position: fixed;
+  /* Anchored at the fixed-positioning origin; public/app.js's own
+     pointermove handler does the actual per-frame positioning entirely via
+     `transform: translate(...)` (compositor-only, no layout/paint), so this
+     element's left/top never need to move. */
+  top: 0;
+  left: 0;
   z-index: 20;
   display: none;
   box-sizing: border-box;
   border-radius: 50%;
   border: 1px solid rgba(0, 0, 0, 0.7);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8);
-  transform: translate(-50%, -50%);
   pointer-events: none;
 }
 
