@@ -68,9 +68,10 @@ function visibleRectPaints() {
   return allCanvasContexts.filter((c) => c !== overlay).reduce((n, c) => n + c.rect.mock.calls.length, 0);
 }
 const artwork = () => allCanvasContexts.filter((c) => c !== canvasContexts.get("remote-stroke-preview"));
-// The scratch canvas: the only context that clips with destination-in, and the one the Public fade
-// opacity is applied on. Owner layer masks are permanent and never faded, so fade assertions must look here.
-const scratch = () => allCanvasContexts.find((c) => (c as any).compositeWrites?.includes("destination-in"));
+// The scratch canvas: the only artwork context the compositor translates (to the repaint region's origin), and
+// the one the Public fade opacity is applied on. Owner layer masks are permanent and never faded, so fade
+// assertions must look here. (An op no erase can touch is not clipped, so destination-in is not a reliable marker.)
+const scratch = () => allCanvasContexts.find((c) => c.translate.mock.calls.length > 0);
 const scratchRectPaints = () => (scratch()?.rect.mock.calls.length ?? 0);
 const sum = (pick: (c: (typeof allCanvasContexts)[number]) => number) => artwork().reduce((n, c) => n + pick(c), 0);
 

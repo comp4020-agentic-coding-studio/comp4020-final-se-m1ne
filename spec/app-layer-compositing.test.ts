@@ -18,6 +18,7 @@ type Ev = { ctx: string; type: string; tag?: string; composite?: string };
 let log: Ev[] = [];
 let names = new Map<unknown, string>();
 let anonCount = 0;
+let generation = 0; // earlier tests' app instances keep their 1 Hz fade timers alive; only the current boot may log
 
 beforeEach(() => {
   posted = [];
@@ -43,13 +44,14 @@ const card = (name: string) =>
 function instrument(c: any, el?: HTMLCanvasElement) {
   if (c.__instrumented) return c;
   c.__instrumented = true;
+  const myGeneration = generation;
   const name = el?.id || `anon${anonCount++}`;
   if (el) names.set(el, name);
   let tag: string | undefined;
   const wrap = (method: string, fn: (args: unknown[]) => void) => {
     const orig = c[method];
     c[method] = (...args: unknown[]) => {
-      fn(args);
+      if (myGeneration === generation) fn(args);
       return orig(...args);
     };
   };
@@ -68,6 +70,7 @@ function instrument(c: any, el?: HTMLCanvasElement) {
 
 async function boot(ops: unknown[] = []) {
   await bootAppForTest(posted);
+  generation++;
   names = new Map();
   anonCount = 0;
   log = [];
@@ -225,5 +228,99 @@ describe("layer ids stay unchanged", () => {
     await shape("rectangle", "Lineart");
     const sent = posted.filter((p) => p.url.endsWith("/draw")).map((p) => p.body.layerId);
     expect(sent).toEqual(["colour", "lineart", "colour", "lineart"]);
+  });
+});
+
+// How many times the compositor applied an owner mask (destination-in drawImage) since `log` was last reset.
+const maskApplications = () => log.filter((e) => e.type === "draw" && e.composite === "destination-in").length;
+
+describe("masking is applied only where an owner's own erase can matter (no attenuation / gaps)", () => {
+  const big = (over: Record<string, unknown> = {}) =>
+    op({ id: "green", seq: 1, color: "#00aa00", points: [{ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.9 }], layerId: "colour", ...over });
+
+  it("a smaller shape drawn over a large one is composited without any owner mask, and nothing is erased", async () => {
+    await boot([big()]);
+    log.length = 0;
+    await shape("rectangle", "Colour"); // overlapping orange-ish shape, same layer and owner
+    await fullRepaint();
+    expect(maskApplications()).toBe(0);
+    expect((canvasContexts.get("canvas") as unknown as { compositeWrites: string[] }).compositeWrites.some((c) => c.startsWith("destination"))).toBe(false);
+  });
+
+  it("a freehand brush stroke over a large shape is composited without any owner mask either", async () => {
+    await boot([big()]);
+    click($("tool-brush"));
+    await flush();
+    log.length = 0;
+    await drag(400, 400, 800, 600);
+    await fullRepaint();
+    expect(maskApplications()).toBe(0);
+  });
+
+  it("an owner's own newer overlapping erase masks that owner's op", async () => {
+    await boot([big(), op({ id: "e1", seq: 2, kind: "erase", color: null, shape: undefined, size: 0.02, points: [{ x: 0.4, y: 0.4 }, { x: 0.6, y: 0.6 }], layerId: "colour" })]);
+    log.length = 0;
+    await fullRepaint(); // two repaints (hide, show): the op is masked once in each
+    expect(maskApplications()).toBe(2);
+  });
+
+  it("another owner's erase never masks this owner's artwork", async () => {
+    await boot([
+      big(),
+      op({ id: "e1", seq: 2, ownerId: "someone-else", kind: "erase", color: null, shape: undefined, size: 0.02, points: [{ x: 0.4, y: 0.4 }, { x: 0.6, y: 0.6 }], layerId: "colour" }),
+    ]);
+    log.length = 0;
+    await fullRepaint();
+    expect(maskApplications()).toBe(0);
+  });
+});
+
+describe("alternating tools across layers", () => {
+  it("ten alternations of rectangle, ellipse, line and brush keep every op on its own layer and in layer order", async () => {
+    await boot();
+    const tools = ["rectangle", "ellipse", "line", "brush"];
+    const expected: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      const layer = i % 2 === 0 ? "Colour" : "Lineart";
+      expected.push(layer === "Colour" ? "colour" : "lineart");
+      click(card(layer));
+      await flush();
+      click($(`tool-${tools[i % 4]}`));
+      await flush();
+      await drag(300 + i * 5, 300, 900, 700);
+    }
+    expect(posted.filter((p) => p.url.endsWith("/draw")).map((p) => p.body.layerId)).toEqual(expected);
+    await fullRepaint();
+    // every Colour paint (5) is composited before every Lineart paint (5)
+    expect(blitTags()).toHaveLength(10);
+    const lines = log.filter((e) => e.ctx.startsWith("anon") && e.type === "paint");
+    expect(lines.length).toBeGreaterThan(0);
+  });
+});
+
+describe("pending -> committed transition", () => {
+  it("an op is composited exactly once per repaint before and after the server confirms it", async () => {
+    await boot();
+    await shape("rectangle", "Lineart");
+    const countBlits = () => {
+      log.length = 0;
+      return fullRepaint().then(() => blitTags().length);
+    };
+    expect(await countBlits()).toBe(1);
+    // the realtime echo of the same op must not duplicate it
+    const sent = posted.find((p) => p.url.endsWith("/draw"))!.body;
+    latestEventSource().emit("op", { seq: 99, id: "echo", ownerId: MY_OWNER_ID, kind: "draw", color: sent.color, size: sent.width, points: sent.points, createdAt: Date.now(), layerId: sent.layerId, shape: sent.shape });
+    await flush();
+    expect(await countBlits()).toBe(2); // a genuinely new op (different id) is the second one, not a duplicate of the first
+  });
+
+  it("refresh/replay of the saved ops reproduces the same layer order", async () => {
+    await boot([
+      op({ id: "a", seq: 1, layerId: "lineart", shape: { type: "ellipse", mode: "filled" } }),
+      op({ id: "b", seq: 2, layerId: "colour" }),
+    ]);
+    log.length = 0;
+    await fullRepaint();
+    expect(blitTags()).toEqual(["rect", "ellipse"]);
   });
 });

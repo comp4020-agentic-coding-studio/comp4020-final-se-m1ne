@@ -460,8 +460,8 @@ function opNormalizedBounds(op) {
       if (p.y < minY) minY = p.y;
       if (p.y > maxY) maxY = p.y;
     }
-    const padX = op.size / 2;
-    const padY = padX * (canvas.width / canvas.height);
+    const padX = op.size / 2 + 2 / canvas.width; // half the stroke width (round caps/joins) + antialiasing fringe
+    const padY = (op.size / 2) * (canvas.width / canvas.height) + 2 / canvas.height;
     op._normBounds = { minX: minX - padX, minY: minY - padY, maxX: maxX + padX, maxY: maxY + padY };
   }
   return op._normBounds;
@@ -479,6 +479,38 @@ function opPixelBounds(op) {
 
 function rectsIntersect(a, b) {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+// Local erase gestures that finished but are not in allOps yet (their POST is unresolved). Their effect is
+// already in the owner's layer mask, so ops they cover must keep being masked until the erase op lands.
+let unconfirmedErases = [];
+
+// Every persisted erase op, grouped by (owner, layer), in seq order.
+function erasesByOwnerLayer() {
+  const byKey = new Map();
+  for (const op of allOps) {
+    if (op.kind !== "erase") continue;
+    const key = ownerLayerKey(op.ownerId, effectiveLayerId(op, isPublicCanvas));
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(op);
+  }
+  return byKey;
+}
+
+// A draw op only has to be clipped by its owner's layer mask if an erase by that same owner on that same
+// layer, newer than the op and overlapping it, exists (persisted, in flight, or being dragged right now).
+// Every other op is a subset of its own mask, so masking it would change nothing except to square its
+// antialiased edge alpha (op alpha x mask alpha) -- which is exactly the attenuation we must not introduce.
+function opNeedsOwnerMask(op, layerId, erases) {
+  if (erasePreviewLayerFor(op.ownerId, layerId)) return true;
+  if (op.ownerId === myOwnerId) {
+    if (current && current.kind === "erase" && current.layerId === layerId) return true;
+    if (unconfirmedErases.some((e) => e.layerId === layerId)) return true;
+  }
+  const list = erases.get(ownerLayerKey(op.ownerId, layerId));
+  if (!list) return false;
+  const b = opPixelBounds(op);
+  return list.some((e) => e.seq > op.seq && rectsIntersect(opPixelBounds(e), b));
 }
 
 // Full rebuild of the shared visible canvas from scratch, in global seq
@@ -515,6 +547,7 @@ function repaintVisibleCanvas(region) {
   // (this viewer's pendingOps, then the in-progress stroke/shape, then remote draw previews). Nothing of a
   // lower layer is ever drawn after anything of a higher layer, so layer order always beats drawing time.
   const ids = layerIdsFor(isPublicCanvas);
+  const erases = erasesByOwnerLayer();
   const opsByLayer = new Map(ids.map((id) => [id, []]));
   for (const op of getRenderOrderOps()) {
     if (op.kind === "draw") opsByLayer.get(effectiveLayerId(op, isPublicCanvas))?.push(op); // an erase op's only effect is already baked into its owner's layer mask and it never fades
@@ -559,11 +592,13 @@ function repaintVisibleCanvas(region) {
       const opacity = effectiveOpacity(op, now, isPublicCanvas);
       if (opacity <= 0) continue;
       if (clipRect && !rectsIntersect(opPixelBounds(op), clipRect)) continue; // this op can't paint inside the dirty region at all
-      const ownerLayer = layers.get(ownerLayerKey(op.ownerId, layerId));
-      if (!ownerLayer) continue;
+      const masked = opNeedsOwnerMask(op, layerId, erases);
+      const ownerLayer = masked ? layers.get(ownerLayerKey(op.ownerId, layerId)) : null;
+      if (masked && !ownerLayer) continue;
       beginScratch(opacity);
       renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points, op.shape);
       scratchCtx.restore(); // back to the untransformed, default state for the mask step
+      if (masked) {
       scratchCtx.globalAlpha = 1;
       scratchCtx.globalCompositeOperation = "destination-in";
       // While this op's owner has a remote erase in progress, clip against the disposable preview of their
@@ -571,6 +606,7 @@ function repaintVisibleCanvas(region) {
       // owner's erase can never affect another owner's artwork).
       const clipSource = erasePreviewLayerFor(op.ownerId, layerId) ?? ownerLayer.canvas;
       scratchCtx.drawImage(clipSource, rx, ry, rw, rh, 0, 0, rw, rh);
+      }
       blitScratch();
     }
     if (myOwnerId !== null) {
@@ -1449,24 +1485,10 @@ function renderCurrentDelta() {
   const delta = current.points.slice(currentLastRenderedIndex);
   renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, delta);
   currentLastRenderedIndex = current.points.length - 1;
-  if (current.kind === "draw" && isTopLayerId(current.layerId)) {
-    // Newest content on the top layer is always safe to paint directly on top, unclipped --
-    // nothing above this layer exists to occlude it.
-    renderPathOnLayer(ctx, "draw", current.color, current.size, delta);
-  } else if (current.kind === "draw") {
-    // A lower layer must stay under every higher layer's content: regional layer-ordered repaint,
-    // which paints `current` right after its own layer's committed ops.
-    repaintVisibleCanvas(deltaRegionPixels(delta, current.size));
-  } else {
-    // An in-progress erase can retroactively shrink any of this owner's
-    // already-composited draws, anywhere in the global stacking order --
-    // not expressible as a direct paint, so repaint instead. But only the
-    // pixels this frame's delta actually touches can have changed (erasing
-    // only shrinks alpha, it never reveals anything outside the stroke), so
-    // restrict the repaint to that region instead of the whole canvas --
-    // see repaintVisibleCanvas's own comment for why that's still exact.
-    repaintVisibleCanvas(deltaRegionPixels(delta, current.size));
-  }
+  // Never painted straight onto the visible canvas: a regional, layer-ordered repaint composites this
+  // stroke (draw: from `current`; erase: through the owner's mask) at its own layer's position. Only the
+  // pixels this frame's delta touches can have changed, so the repaint is restricted to that region.
+  repaintVisibleCanvas(deltaRegionPixels(delta, current.size));
   sendStrokePreview(false);
 }
 
@@ -1713,6 +1735,7 @@ async function persistGesture(finished) {
     // exactly as visible as it already was, which is the pre-existing
     // best-effort contract above, not something this gap-closing fix changes.
     if (finished.kind === "draw") pendingOps = pendingOps.filter((op) => op !== finished);
+    else unconfirmedErases = unconfirmedErases.filter((op) => op !== finished);
     updateUndoRedoButtons();
   }
 }
@@ -1783,18 +1806,15 @@ function endGesture() {
     const finishedShape = current;
     current = null;
     shapeRawPointer = null;
-    if (isTopLayerId(finishedShape.layerId)) {
-      renderPathOnLayer(ctx, "draw", finishedShape.color, finishedShape.size, finishedShape.points, finishedShape.shape);
-    }
-    repaintRemoteStrokePreviews();
     endStrokePreview();
     pendingOps.push(finishedShape);
-    if (!isTopLayerId(finishedShape.layerId)) {
-      // The final shape (now in pendingOps) replaces the preview; repaint over both footprints.
-      const previewRegion = shapePreviewRegion;
-      shapePreviewRegion = null;
-      repaintVisibleCanvas(unionRegions(previewRegion, opPixelBounds(finishedShape)));
-    }
+    // The shape now lives in pendingOps (no longer `current`): composite it at its layer position, over the
+    // footprint of both the preview it replaces and itself, and drop any top-layer overlay preview in the
+    // same synchronous turn so it is never visible twice or not at all.
+    const previewRegion = shapePreviewRegion;
+    shapePreviewRegion = null;
+    repaintVisibleCanvas(unionRegions(previewRegion, opPixelBounds(finishedShape)));
+    repaintRemoteStrokePreviews();
     updateUndoRedoButtons();
     persistGesture(finishedShape);
     return;
@@ -1819,6 +1839,7 @@ function endGesture() {
   // persistGesture's op landing in allOps must still find this gesture
   // somewhere to paint, since allOps itself doesn't have it yet.
   if (finished.kind === "draw") pendingOps.push(finished);
+  else unconfirmedErases.push(finished);
   updateUndoRedoButtons();
   persistGesture(finished);
 }

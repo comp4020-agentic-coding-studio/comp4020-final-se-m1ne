@@ -231,12 +231,16 @@ describe("gesture: preview, commit, stroke width and colour", () => {
     const overlay = canvasContexts.get("remote-stroke-preview")!;
     const realRectsBefore = realCanvas.rect.mock.calls.length;
     const overlayRectsBefore = overlay.rect.mock.calls.length;
+    const realDrawsBefore = realCanvas.drawImage.mock.calls.length;
     await down(100, 100);
     await move(300, 220);
     expect(overlay.rect.mock.calls.length).toBeGreaterThan(overlayRectsBefore); // previewed on the overlay
     expect(realCanvas.rect.mock.calls.length).toBe(realRectsBefore); // the real canvas is untouched mid-drag
     await up(300, 220);
-    expect(realCanvas.rect.mock.calls.length).toBeGreaterThan(realRectsBefore); // committed onto the real canvas
+    // Committed shapes reach the real canvas only through the layer compositor (blitted from a scratch), never as a
+    // direct path on #canvas -- that is what keeps them at their own layer's position.
+    expect(realCanvas.rect.mock.calls.length).toBe(realRectsBefore);
+    expect(realCanvas.drawImage.mock.calls.length).toBeGreaterThan(realDrawsBefore);
   });
 
   it("broadcasts the live preview (carrying the shape) over the existing stroke route, then a stroke-end", async () => {
