@@ -2387,6 +2387,9 @@ const leaveRoomMessage = document.getElementById("leave-room-message");
 const leaveRoomCancelButton = document.getElementById("leave-room-cancel");
 const leaveRoomConfirmButton = document.getElementById("leave-room-confirm");
 const backToPublicLink = document.getElementById("back-to-public");
+const homeLink = document.getElementById("home-link");
+// Where the dialog's Leave button goes: the Public Canvas for the Back button, the landing page for Home.
+let leaveDestination = "/canvas";
 
 function openLeaveRoomDialog() {
   leaveRoomMessage.textContent =
@@ -2479,7 +2482,7 @@ function leavePublicPresenceBestEffort() {
 // stale. Best-effort: the heartbeat simply stopping is still the
 // correctness fallback if this request never lands (closed tab, crash, lost
 // network -- none of which can run this at all).
-async function leaveRoom() {
+async function leaveRoom(destination = "/canvas") {
   stopPresence();
   // The Public page releases this room lease (POST /api/presence/handoff)
   // only after it has registered its own, so Online Now never dips; the room's
@@ -2487,7 +2490,7 @@ async function leaveRoom() {
   markNavigating(roomCode, presenceId);
   // "/" is the landing page now (public/landing.html) -- returning from a
   // Private Room must enter the Public editor directly, not the landing page.
-  location.href = "/canvas";
+  location.href = destination;
 }
 
 // Visibility only -- which controls are shown, not which drawing engine
@@ -2543,12 +2546,19 @@ if (isPublicCanvas) {
 
   backToPublicLink.addEventListener("click", (event) => {
     event.preventDefault(); // never navigate directly -- confirm first
+    leaveDestination = "/canvas";
+    openLeaveRoomDialog();
+  });
+  // Home also goes through the same reminder dialog (it used to navigate straight away), to the link's own href.
+  homeLink.addEventListener("click", (event) => {
+    event.preventDefault();
+    leaveDestination = homeLink.getAttribute("href") ?? "/";
     openLeaveRoomDialog();
   });
   leaveRoomCancelButton.addEventListener("click", closeLeaveRoomDialog);
   leaveRoomConfirmButton.addEventListener("click", () => {
     closeLeaveRoomDialog();
-    leaveRoom();
+    leaveRoom(leaveDestination);
   });
   window.addEventListener("keydown", (event) => {
     if (!leaveRoomOverlay.hidden && event.key === "Escape") closeLeaveRoomDialog();

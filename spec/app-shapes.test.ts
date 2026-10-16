@@ -83,10 +83,10 @@ async function pick(tool: string) {
 }
 
 describe("toolbar", () => {
-  it("has exactly Brush, Airbrush, Eraser, Line, Rectangle, Ellipse, Paint Bucket, in that order, in one column", async () => {
+  it("has exactly Pencil, Airbrush, Eraser, Paint Bucket, Line, Rectangle, Ellipse, in that order, in one column", async () => {
     await bootAppForTest(posted);
     const ids = [...document.querySelectorAll("#tool-group > button")].map((b) => b.id);
-    expect(ids).toEqual(["tool-brush", "tool-airbrush", "tool-eraser", "tool-line", "tool-rectangle", "tool-ellipse", "tool-fill"]);
+    expect(ids).toEqual(["tool-brush", "tool-airbrush", "tool-eraser", "tool-fill", "tool-line", "tool-rectangle", "tool-ellipse"]);
     expect(document.querySelectorAll("#tool-ribbon #tool-group").length).toBe(1); // no second toolbar
   });
 
