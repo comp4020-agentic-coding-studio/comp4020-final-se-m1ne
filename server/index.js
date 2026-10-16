@@ -183,7 +183,7 @@ function pointsValid(points) {
   return Array.isArray(points) && points.length > 0 && points.every(isPoint);
 }
 
-// A shape op (Line/Rectangle/Ellipse/Triangle) is a draw op with a `shape`
+// A shape op (Line/Rectangle/Ellipse) is a draw op with a `shape`
 // descriptor and exactly its two defining corners (anchor, then the final,
 // already-constrained opposite corner), as finite normalized coordinates in a
 // generous range. Returns the normalised descriptor, or null if invalid.
@@ -220,7 +220,7 @@ function handleDraw(req, res, roomId) {
     normalizedShape = normalizeShape(shape, points);
     if (!normalizedShape || !isValidHexColor(color)) {
       res.status(400).json({
-        error: "a shape op needs a supported type (line/rectangle/ellipse/triangle), mode outline|filled, a #rrggbb color and exactly two finite corner points",
+        error: "a shape op needs a supported type (line/rectangle/ellipse), mode outline|filled, a #rrggbb color and exactly two finite corner points",
       });
       return;
     }

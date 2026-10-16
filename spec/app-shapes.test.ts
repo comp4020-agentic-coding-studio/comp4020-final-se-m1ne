@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Client behaviour of the Line / Rectangle / Ellipse / Triangle tools in
+// Client behaviour of the Line / Rectangle / Ellipse tools in
 // public/app.js, booted for real in jsdom: toolbar layout and selection, the
 // Outline/Filled selector, gestures (down/move/up), all four drag directions,
 // live Shift press/release, the geometry that gets committed, cancellation
@@ -17,7 +17,6 @@ import { bootAppForTest, canvasContexts, firePointer, flush, type PostedRequest 
 
 const DOC_W = 1920;
 const DOC_H = 1080;
-const SQRT3_2 = Math.sqrt(3) / 2;
 
 let posted: PostedRequest[];
 
@@ -84,11 +83,18 @@ async function pick(tool: string) {
 }
 
 describe("toolbar", () => {
-  it("has exactly Brush, Eraser, Line, Rectangle, Ellipse, Triangle, in that order, in one column", async () => {
+  it("has exactly Brush, Eraser, Line, Rectangle, Ellipse, in that order, in one column", async () => {
     await bootAppForTest(posted);
     const ids = [...document.querySelectorAll("#tool-group > button")].map((b) => b.id);
-    expect(ids).toEqual(["tool-brush", "tool-eraser", "tool-line", "tool-rectangle", "tool-ellipse", "tool-triangle"]);
+    expect(ids).toEqual(["tool-brush", "tool-eraser", "tool-line", "tool-rectangle", "tool-ellipse"]);
     expect(document.querySelectorAll("#tool-ribbon #tool-group").length).toBe(1); // no second toolbar
+  });
+
+  it("has no Triangle tool: no button, no label, no way to select it", async () => {
+    await bootAppForTest(posted);
+    expect(document.getElementById("tool-triangle")).toBeNull();
+    expect(document.querySelector('[aria-label="Triangle"], [title="Triangle"]')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/triangle/i);
   });
 
   it("all six use the one existing .tool-button style, each with an icon and an accessible name", async () => {
@@ -103,7 +109,7 @@ describe("toolbar", () => {
 
   it("only one tool is selected at a time", async () => {
     await bootAppForTest(posted);
-    for (const t of ["line", "rectangle", "ellipse", "triangle", "eraser", "brush"]) {
+    for (const t of ["line", "rectangle", "ellipse", "eraser", "brush"]) {
       await pick(t);
       const selected = [...document.querySelectorAll("#tool-group > button.selected")].map((b) => b.id);
       expect(selected).toEqual([`tool-${t}`]);
@@ -121,20 +127,20 @@ describe("toolbar", () => {
 });
 
 describe("Outline / Filled selector", () => {
-  it("is hidden for Brush, Eraser and Line and shown for Rectangle, Ellipse and Triangle", async () => {
+  it("is hidden for Brush, Eraser and Line and shown for Rectangle and Ellipse", async () => {
     await bootAppForTest(posted);
     const control = $("shape-mode-control") as HTMLElement;
     for (const t of ["brush", "eraser", "line"]) {
       await pick(t);
       expect(control.hidden, t).toBe(true);
     }
-    for (const t of ["rectangle", "ellipse", "triangle"]) {
+    for (const t of ["rectangle", "ellipse"]) {
       await pick(t);
       expect(control.hidden, t).toBe(false);
     }
   });
 
-  it("defaults to Outline, is one shared setting across the three shapes, and is one compact control (two buttons)", async () => {
+  it("defaults to Outline, is one shared setting across Rectangle and Ellipse, and is one compact control (two buttons)", async () => {
     await bootAppForTest(posted);
     await pick("rectangle");
     expect($("shape-mode-outline").classList.contains("selected")).toBe(true);
@@ -142,7 +148,7 @@ describe("Outline / Filled selector", () => {
     expect(document.querySelectorAll("#shape-mode-control button")).toHaveLength(2);
 
     click("shape-mode-filled");
-    for (const t of ["ellipse", "triangle", "rectangle"]) {
+    for (const t of ["ellipse", "rectangle"]) {
       await pick(t);
       expect($("shape-mode-filled").classList.contains("selected"), t).toBe(true);
       expect($("shape-mode-filled").getAttribute("aria-pressed")).toBe("true");
@@ -211,7 +217,7 @@ describe("gesture: preview, commit, stroke width and colour", () => {
     const slider = $("tool-size-slider") as HTMLInputElement;
     slider.value = "17";
     slider.dispatchEvent(new Event("input", { bubbles: true }));
-    for (const t of ["rectangle", "triangle", "brush"]) {
+    for (const t of ["rectangle", "ellipse", "brush"]) {
       await pick(t);
       expect(slider.value, t).toBe("17");
       expect(slider.disabled).toBe(false);
@@ -235,11 +241,11 @@ describe("gesture: preview, commit, stroke width and colour", () => {
 
   it("broadcasts the live preview (carrying the shape) over the existing stroke route, then a stroke-end", async () => {
     await bootAppForTest(posted);
-    await pick("triangle");
+    await pick("ellipse");
     await dragShape(100, 100, 300, 220);
     const active = strokePosts().filter((p) => p.body.active === true);
     expect(active.length).toBeGreaterThan(0);
-    for (const p of active) expect(p.body.shape).toEqual({ type: "triangle", mode: "outline" });
+    for (const p of active) expect(p.body.shape).toEqual({ type: "ellipse", mode: "outline" });
     expect(strokePosts().filter((p) => p.body.active === false)).toHaveLength(1);
   });
 
@@ -260,7 +266,7 @@ describe("geometry in all four drag directions", () => {
     ["up-left", -1, -1],
   ];
 
-  for (const tool of ["line", "rectangle", "ellipse", "triangle"]) {
+  for (const tool of ["line", "rectangle", "ellipse"]) {
     for (const [name, sx, sy] of dirs) {
       it(`${tool} ${name}: anchored at pointer-down, other corner at the pointer`, async () => {
         await bootAppForTest(posted);
@@ -300,22 +306,6 @@ describe("Shift constraints at pointer-up", () => {
         expect(Math.sign(b.y - a.y)).toBe(sy);
       });
     }
-  }
-
-  for (const [name, sx, sy] of dirs) {
-    it(`Shift triangle ${name}: mathematically equilateral (height = base * sqrt(3)/2), not an equal-sided box`, async () => {
-      await bootAppForTest(posted);
-      await pick("triangle");
-      await dragShape(900, 500, 900 + sx * 300, 500 + sy * 400, true);
-      const [a, b] = postedCornersPx();
-      const base = Math.abs(b.x - a.x);
-      const height = Math.abs(b.y - a.y);
-      expect(height).toBeCloseTo(base * SQRT3_2, 6);
-      expect(Math.abs(height - base)).toBeGreaterThan(10);
-      expect(base).toBeCloseTo(300, 6);
-      expect(Math.sign(b.x - a.x)).toBe(sx);
-      expect(Math.sign(b.y - a.y)).toBe(sy);
-    });
   }
 
   it("a line is not constrained by Shift", async () => {
@@ -412,7 +402,7 @@ describe("dynamic Shift during a drag", () => {
 
   it("Shift pressed and released several times during one drag does not restart or break it", async () => {
     await bootAppForTest(posted);
-    await pick("triangle");
+    await pick("ellipse");
     await down(900, 500);
     await move(1200, 800);
     await key("keydown", "Shift");
@@ -422,7 +412,7 @@ describe("dynamic Shift during a drag", () => {
     expect(draws()).toHaveLength(1);
     const [a, b] = postedCornersPx();
     expect(a).toEqual({ x: 900, y: 500 });
-    expect(Math.abs(b.y - a.y)).toBeCloseTo(Math.abs(b.x - a.x) * SQRT3_2, 6);
+    expect(Math.abs(b.y - a.y)).toBeCloseTo(Math.abs(b.x - a.x), 6); // Shift held at release -> a circle
   });
 });
 
@@ -453,7 +443,7 @@ describe("cancellation and accidental shapes", () => {
 
   it("lost pointer capture drops the shape without committing", async () => {
     await bootAppForTest(posted);
-    await pick("triangle");
+    await pick("rectangle");
     await down(900, 500);
     await move(1100, 640);
     canvas().dispatchEvent(new Event("lostpointercapture", { bubbles: true }));
@@ -475,7 +465,7 @@ describe("cancellation and accidental shapes", () => {
 
   it("a click with no movement creates no shape, for every shape tool", async () => {
     await bootAppForTest(posted);
-    for (const t of ["line", "rectangle", "ellipse", "triangle"]) {
+    for (const t of ["line", "rectangle", "ellipse"]) {
       await pick(t);
       await down(900, 500);
       await up(900, 500);

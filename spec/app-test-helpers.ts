@@ -94,6 +94,8 @@ function makeStubContext() {
     rect: vi.fn(),
     ellipse: vi.fn(),
     closePath: vi.fn(),
+    translate: vi.fn(),
+    clip: vi.fn(),
     fill: vi.fn(),
     createLinearGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
     getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(4) })),

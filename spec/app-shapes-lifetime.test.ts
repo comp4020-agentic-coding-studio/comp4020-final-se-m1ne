@@ -75,19 +75,37 @@ const scratchRectPaints = () => (scratch()?.rect.mock.calls.length ?? 0);
 const sum = (pick: (c: (typeof allCanvasContexts)[number]) => number) => artwork().reduce((n, c) => n + pick(c), 0);
 
 describe("a shape op replays from the server snapshot (refresh / remote)", () => {
-  it("renders on the visible canvas: a rectangle, an ellipse and a triangle each through their own path", async () => {
+  it("renders on the visible canvas: a rectangle, an ellipse, a line and a STORED (legacy) triangle each through their own path", async () => {
     const ops = [
       shapeOp({ id: "r", seq: 1, shape: { type: "rectangle", mode: "outline" } }),
       shapeOp({ id: "e", seq: 2, shape: { type: "ellipse", mode: "filled" } }),
-      shapeOp({ id: "t", seq: 3, shape: { type: "triangle", mode: "outline" } }),
+      shapeOp({ id: "t", seq: 3, shape: { type: "triangle", mode: "outline" } }), // saved before the tool was removed
       shapeOp({ id: "l", seq: 4, shape: { type: "line" } }),
     ];
     await bootAt("/", ops);
     expect(sum((c) => c.rect.mock.calls.length)).toBeGreaterThan(0);
     expect(sum((c) => c.ellipse.mock.calls.length)).toBeGreaterThan(0);
-    expect(sum((c) => c.closePath.mock.calls.length)).toBeGreaterThan(0); // triangle
+    expect(sum((c) => c.closePath.mock.calls.length)).toBeGreaterThan(0); // the stored triangle still renders
     expect(sum((c) => c.fill.mock.calls.length)).toBeGreaterThan(0); // the filled ellipse
     expect(sum((c) => c.stroke.mock.calls.length)).toBeGreaterThan(0); // outlines and the line
+  });
+
+  it("a stored filled triangle still fills, in Public and in a Private Room (existing artwork is never lost)", async () => {
+    for (const where of ["/", "/room/ABC123"]) {
+      await bootAt(where, [shapeOp({ id: "legacy-t", shape: { type: "triangle", mode: "filled" } })]);
+      expect(sum((c) => c.closePath.mock.calls.length), where).toBeGreaterThan(0);
+      expect(sum((c) => c.fill.mock.calls.length), where).toBeGreaterThan(0);
+    }
+  });
+
+  it("a stored triangle's geometry still comes from its two stored corners (apex centred on the far edge)", async () => {
+    await bootAt("/", [shapeOp({ shape: { type: "triangle", mode: "outline" }, points: [{ x: 0.25, y: 0.25 }, { x: 0.5, y: 0.5 }] })]);
+    const lineTos = artwork().flatMap((c) => c.lineTo.mock.calls as number[][]);
+    const moveTos = artwork().flatMap((c) => c.moveTo.mock.calls as number[][]);
+    // vertices in document pixels: base (480,270)-(960,270), apex (720,540)
+    expect(moveTos.some(([x, y]) => Math.abs(x - 480) < 1e-6 && Math.abs(y - 270) < 1e-6)).toBe(true);
+    expect(lineTos.some(([x, y]) => Math.abs(x - 960) < 1e-6 && Math.abs(y - 270) < 1e-6)).toBe(true);
+    expect(lineTos.some(([x, y]) => Math.abs(x - 720) < 1e-6 && Math.abs(y - 540) < 1e-6)).toBe(true);
   });
 
   it("a remote collaborator's live 'op' event paints the shape without a refresh", async () => {
@@ -176,13 +194,13 @@ describe("Public and Private toolbar styling and responsive layout (source)", ()
     return m![0];
   };
 
-  it("all six tools share the one 48x48 rounded-square style, in one 10px-spaced column", () => {
+  it("all five tools share the one 48x48 rounded-square style, in one 10px-spaced column", () => {
     expect(rule("#tool-group .tool-button")).toMatch(/width:\s*48px/);
     expect(rule("#tool-group .tool-button")).toMatch(/height:\s*48px/);
     expect(rule("#tool-group")).toMatch(/flex-direction:\s*column/);
     expect(rule("#tool-group")).toMatch(/gap:\s*10px/);
     // no per-tool size or shape overrides
-    for (const id of ["line", "rectangle", "ellipse", "triangle"]) expect(css).not.toMatch(new RegExp(`#tool-${id}\\s*\\{`));
+    for (const id of ["line", "rectangle", "ellipse"]) expect(css).not.toMatch(new RegExp(`#tool-${id}\\s*\\{`));
   });
 
   it("the selected-tool accent is the room's accent variable: sage by default, lavender in a Private Room", () => {

@@ -1,4 +1,4 @@
-// Server contract for shape ops (Line/Rectangle/Ellipse/Triangle) over real
+// Server contract for shape ops (Line/Rectangle/Ellipse) over real
 // HTTP+SSE, against the shared test server: validation, persistence and
 // replay, ordering, owner-specific undo/redo, owner-specific erasing, Public
 // vs Private room isolation, the live-preview route, and the realtime "op"
@@ -138,7 +138,7 @@ const shapeBody = (shape: unknown, extra: Record<string, unknown> = {}) => ({
 });
 
 describe("shape op validation", () => {
-  it("accepts every shape type in Outline and Filled mode (and a line), on a room", async () => {
+  it("accepts line, rectangle and ellipse in Outline and Filled mode (a line has none), on a room", async () => {
     const room = await newRoom();
     const me = await guest();
     const cases: unknown[] = [
@@ -147,8 +147,6 @@ describe("shape op validation", () => {
       { type: "rectangle", mode: "filled" },
       { type: "ellipse", mode: "outline" },
       { type: "ellipse", mode: "filled" },
-      { type: "triangle", mode: "outline" },
-      { type: "triangle", mode: "filled" },
     ];
     for (const shape of cases) {
       const res = await postJson(drawPath(room), shapeBody(shape), me);
@@ -163,6 +161,8 @@ describe("shape op validation", () => {
     const me = await guest();
     const bad: Array<[string, unknown]> = [
       ["unknown type", shapeBody({ type: "star", mode: "filled" })],
+      ["triangle (removed tool) outline", shapeBody({ type: "triangle", mode: "outline" })],
+      ["triangle (removed tool) filled", shapeBody({ type: "triangle", mode: "filled" })],
       ["missing mode on a closed shape", shapeBody({ type: "rectangle" })],
       ["unknown mode", shapeBody({ type: "ellipse", mode: "stripey" })],
       ["a filled line", shapeBody({ type: "line", mode: "filled" })],
@@ -212,10 +212,10 @@ describe("persistence, ordering and replay", () => {
   it("a shape round-trips exactly: type, mode, colour, width and corner geometry", async () => {
     const room = await newRoom();
     const me = await guest();
-    const saved = await postJson(drawPath(room), shapeBody({ type: "triangle", mode: "filled" }, { color: "#355c9a", width: 0.0125 }), me);
+    const saved = await postJson(drawPath(room), shapeBody({ type: "ellipse", mode: "filled" }, { color: "#355c9a", width: 0.0125 }), me);
     const [op] = await listOps(room);
     expect(op.id).toBe(saved.body.id);
-    expect(op.shape).toEqual({ type: "triangle", mode: "filled" });
+    expect(op.shape).toEqual({ type: "ellipse", mode: "filled" });
     expect(op.color).toBe("#355c9a");
     expect(op.size).toBe(0.0125);
     expect(op.points).toEqual(CORNERS);
@@ -273,13 +273,13 @@ describe("owner-specific undo / redo of shapes", () => {
   it("undo removes only the caller's own newest op and redo restores the very same shape row", async () => {
     const room = await newRoom();
     const me = await guest();
-    const draw = await postJson(drawPath(room), shapeBody({ type: "triangle", mode: "filled" }), me);
+    const draw = await postJson(drawPath(room), shapeBody({ type: "ellipse", mode: "filled" }), me);
     const undone = await postJson(undoPath(room), {}, me);
     expect(undone.body.op.id).toBe(draw.body.id);
     expect(await listOps(room)).toHaveLength(0);
     const redone = await postJson(redoPath(room), {}, me);
     expect(redone.body.op.id).toBe(draw.body.id);
-    expect(redone.body.op.shape).toEqual({ type: "triangle", mode: "filled" });
+    expect(redone.body.op.shape).toEqual({ type: "ellipse", mode: "filled" });
     const [op] = await listOps(room);
     expect(op.id).toBe(draw.body.id);
     expect(op.seq).toBe(draw.body.seq); // original position in the replay order
@@ -355,10 +355,10 @@ describe("realtime: shape ops and live previews", () => {
     const room = await newRoom();
     const viewer = await connect(`/api/rooms/${room}/ops/stream`);
     await viewer.nextOfType("sync");
-    const res = await postJson(drawPath(room), shapeBody({ type: "triangle", mode: "outline" }));
+    const res = await postJson(drawPath(room), shapeBody({ type: "ellipse", mode: "outline" }));
     const ev = await viewer.nextOfType("op");
     expect(ev.data.id).toBe(res.body.id);
-    expect(ev.data.shape).toEqual({ type: "triangle", mode: "outline" });
+    expect(ev.data.shape).toEqual({ type: "ellipse", mode: "outline" });
     expect(ev.data.points).toEqual(CORNERS);
     expect(ev.data.active).toBe(true);
   });
@@ -399,6 +399,7 @@ describe("realtime: shape ops and live previews", () => {
     const me = await guest();
     const bad = [
       { active: true, kind: "draw", color: "#e85d5d", size: 0.004, points: CORNERS, shape: { type: "star", mode: "filled" } },
+      { active: true, kind: "draw", color: "#e85d5d", size: 0.004, points: CORNERS, shape: { type: "triangle", mode: "outline" } },
       { active: true, kind: "draw", color: "#e85d5d", size: 0.004, points: [CORNERS[0]], shape: { type: "line" } },
       { active: true, kind: "erase", color: null, size: 0.004, points: CORNERS, shape: { type: "line" } },
     ];

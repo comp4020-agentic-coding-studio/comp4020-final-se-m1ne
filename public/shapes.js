@@ -4,14 +4,16 @@
 //
 // A shape op stores only its two defining corner points in document pixels
 // (the drag's anchor and its final pointer position, in that order) plus
-// {type, mode}. Everything else -- the Shift constraint, the triangle's
-// apex -- is derived here from those two points, so the same op renders
-// identically everywhere.
+// {type, mode}. Everything else -- the Shift constraint -- is derived here
+// from those two points, so the same op renders identically everywhere.
+//
+// Triangle is no longer a tool and cannot be created, but triangle ops saved
+// while it existed are still rendered here (see triangleVertices) so existing
+// artwork is never lost.
 
-export const SHAPE_TYPES = ["line", "rectangle", "ellipse", "triangle"];
+// The shape types a NEW op may have. (Stored triangle ops are replay-only.)
+export const SHAPE_TYPES = ["line", "rectangle", "ellipse"];
 export const SHAPE_MODES = ["outline", "filled"];
-
-const SQRT3_OVER_2 = Math.sqrt(3) / 2;
 
 // A drag shorter than this (in document pixels) is a click, not a shape -- it
 // must not create an accidental one.
@@ -20,7 +22,7 @@ export const MIN_SHAPE_DRAG_PX = 3;
 // Whether corners a (anchor) and b (final, already constrained) describe a real
 // shape. A line needs length; every other shape needs a non-degenerate
 // bounding box as well, so a perfectly horizontal drag cannot commit an
-// invisible zero-height rectangle/ellipse/triangle.
+// invisible zero-height rectangle/ellipse.
 export function isMeaningfulShape(type, a, b) {
   const dx = Math.abs(b.x - a.x);
   const dy = Math.abs(b.y - a.y);
@@ -32,8 +34,6 @@ export function isMeaningfulShape(type, a, b) {
 // in the same quadrant as the drag. Fits inside the dragged region (uses the
 // smaller extent) so the constrained shape never exceeds what was dragged.
 //   rectangle / ellipse: equal width and height (square / circle).
-//   triangle: height = width * sqrt(3)/2 (equilateral), the width being the
-//             base; fits when both the width and the derived height fit.
 //   line: never constrained.
 export function constrainCorner(type, anchor, pointer, shift) {
   if (!shift || type === "line") return { x: pointer.x, y: pointer.y };
@@ -43,11 +43,6 @@ export function constrainCorner(type, anchor, pointer, shift) {
   const sy = dy < 0 ? -1 : 1;
   const w = Math.abs(dx);
   const h = Math.abs(dy);
-  if (type === "triangle") {
-    // Largest equilateral triangle whose base is <= w and height <= h.
-    const base = Math.min(w, h / SQRT3_OVER_2);
-    return { x: anchor.x + sx * base, y: anchor.y + sy * base * SQRT3_OVER_2 };
-  }
   const side = Math.min(w, h);
   return { x: anchor.x + sx * side, y: anchor.y + sy * side };
 }
@@ -59,19 +54,10 @@ export function boundsOf(a, b) {
   return { left, top, right: Math.max(a.x, b.x), bottom: Math.max(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) };
 }
 
-// The triangle's three vertices for corners a (anchor) and b (opposite
-// corner). The base spans the bounding region's width along the edge at the
-// anchor's y; the apex is centred horizontally on the opposite horizontal
-// edge. Dragging away from the anchor vertically therefore points the apex
-// that way: down-drag -> apex at the bottom, up-drag -> apex at the top.
-//   Reading the spec literally: "base spans the bounding region's width and
-//   whose apex is centred horizontally at the opposite vertical edge", and
-//   "drag direction determines whether the triangle points upward or
-//   downward". Pointer-down is the anchor, so the base lies on the anchor's
-//   horizontal edge and the apex on the far one: dragging downward (b.y >
-//   a.y) puts the base on top and the apex at the bottom (pointing down);
-//   dragging upward puts the base at the bottom and the apex on top
-//   (pointing up).
+// REPLAY ONLY: the three vertices of a previously saved triangle op, from its
+// two stored corners a (anchor) and b. The base spans the width on the
+// anchor's edge and the apex is centred on the opposite edge. Nothing creates
+// triangle ops any more; this exists solely so existing ones still render.
 export function triangleVertices(a, b) {
   const left = Math.min(a.x, b.x);
   const right = Math.max(a.x, b.x);
@@ -84,7 +70,8 @@ export function triangleVertices(a, b) {
 }
 
 // Builds the canvas path for a shape into ctx (no stroke/fill call). Points are
-// document pixels.
+// document pixels. Any type other than line/rectangle/ellipse is a stored
+// (legacy) triangle.
 export function traceShapePath(ctx, type, a, b) {
   ctx.beginPath();
   if (type === "line") {

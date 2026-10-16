@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Regression tests for two bugs in the Line/Rectangle/Ellipse/Triangle tools.
+// Regression tests for two bugs in the Line/Rectangle/Ellipse tools.
 //
 // BUG 1 -- stray diagonal marks. A shape gesture's `points` is its two defining
 // corners [anchor, end]. If anything paints those through the freehand polyline
@@ -78,7 +78,7 @@ async function forceRepaintMidDrag(kind: "op" | "sync" | "undo") {
 }
 
 describe("Bug 1: an unfinished shape is never painted as artwork (no stray diagonal)", () => {
-  for (const tool of ["line", "rectangle", "ellipse", "triangle"]) {
+  for (const tool of ["line", "rectangle", "ellipse"]) {
     for (const trigger of ["op", "sync"] as const) {
       it(`${tool}: a remote '${trigger}' repaint mid-drag paints no polyline and no shape into real artwork`, async () => {
         await bootAppForTest(posted);
@@ -244,7 +244,7 @@ describe("Bug 2: the preview overlay tracks the canvas's real box (committed sha
     for (let i = 0; i < 4; i++) expect(committed[i]).toBeCloseTo(previewRect[i], 9);
   });
 
-  for (const tool of ["line", "rectangle", "ellipse", "triangle"]) {
+  for (const tool of ["line", "rectangle", "ellipse"]) {
     for (const mode of ["outline", "filled"]) {
       if (tool === "line" && mode === "filled") continue;
       it(`${tool} ${mode}: the committed op's corners equal the last previewed corners (no jump on release)`, async () => {

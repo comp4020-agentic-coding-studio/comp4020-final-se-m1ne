@@ -96,7 +96,7 @@ if (!columnExists("ops", "doc_kind")) {
   db.exec("ALTER TABLE ops ADD COLUMN doc_kind TEXT NOT NULL DEFAULT 'freehand'");
 }
 
-// Shape tools (Line/Rectangle/Ellipse/Triangle): a shape is an ordinary
+// Shape tools (Line/Rectangle/Ellipse; triangle ops saved earlier still replay): a shape is an ordinary
 // 'draw' op (the kind CHECK above cannot be altered in place on an existing
 // database) carrying this extra JSON, {"type": ..., "mode": ...}, with its two
 // defining corner points in `points`. NULL for every brush/erase op, including

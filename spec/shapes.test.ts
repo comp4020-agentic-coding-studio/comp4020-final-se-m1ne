@@ -1,5 +1,5 @@
 // Pure geometry for the shape tools (public/shapes.js): the Shift constraints,
-// drag directions, the triangle vertex rule, the degenerate-drag guard and
+// drag directions, the replay-only legacy triangle rule, the degenerate-drag guard and
 // descriptor validation. No DOM or server -- this is the one calculation the
 // live preview, the committed op and remote/refresh replay all share.
 
@@ -14,7 +14,6 @@ import {
   triangleVertices,
 } from "../public/shapes.js";
 
-const SQRT3_2 = Math.sqrt(3) / 2;
 const anchor = { x: 500, y: 400 };
 
 // All four drag quadrants, as signed offsets from the anchor.
@@ -27,7 +26,7 @@ const QUADRANTS: Array<[string, number, number]> = [
 
 describe("constrainCorner: no Shift", () => {
   it("returns the raw pointer unchanged for every shape and direction", () => {
-    for (const type of ["line", "rectangle", "ellipse", "triangle"]) {
+    for (const type of ["line", "rectangle", "ellipse"]) {
       for (const [, sx, sy] of QUADRANTS) {
         const p = { x: anchor.x + sx * 200, y: anchor.y + sy * 90 };
         expect(constrainCorner(type, anchor, p, false)).toEqual(p);
@@ -65,48 +64,7 @@ describe("constrainCorner: Shift on rectangle/ellipse makes a square/circle", ()
   });
 });
 
-describe("constrainCorner: Shift on triangle makes it equilateral", () => {
-  for (const [name, sx, sy] of QUADRANTS) {
-    it(`triangle ${name}: height = base * sqrt(3)/2 (not equal width/height), fits the dragged region`, () => {
-      const dragW = 260;
-      const dragH = 300; // plenty of height, so width is the binding limit
-      const p = { x: anchor.x + sx * dragW, y: anchor.y + sy * dragH };
-      const c = constrainCorner("triangle", anchor, p, true);
-      const base = Math.abs(c.x - anchor.x);
-      const height = Math.abs(c.y - anchor.y);
-      expect(height).toBeCloseTo(base * SQRT3_2, 9);
-      expect(height).not.toBeCloseTo(base, 3); // explicitly NOT a square bounding box
-      expect(base).toBeCloseTo(dragW, 9);
-      expect(Math.sign(c.x - anchor.x)).toBe(sx);
-      expect(Math.sign(c.y - anchor.y)).toBe(sy);
-      expect(height).toBeLessThanOrEqual(dragH);
-    });
-  }
-
-  it("when the drag is short and wide, height is the binding limit and the triangle still fits", () => {
-    const p = { x: anchor.x + 500, y: anchor.y + 100 };
-    const c = constrainCorner("triangle", anchor, p, true);
-    const base = Math.abs(c.x - anchor.x);
-    const height = Math.abs(c.y - anchor.y);
-    expect(height).toBeCloseTo(100, 9);
-    expect(height).toBeCloseTo(base * SQRT3_2, 9);
-    expect(base).toBeLessThanOrEqual(500);
-  });
-
-  it("the three vertices are mutually equidistant (a true equilateral triangle)", () => {
-    for (const [, sx, sy] of QUADRANTS) {
-      const c = constrainCorner("triangle", anchor, { x: anchor.x + sx * 300, y: anchor.y + sy * 400 }, true);
-      const [p0, p1, p2] = triangleVertices(anchor, c);
-      const d01 = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-      const d12 = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-      const d20 = Math.hypot(p0.x - p2.x, p0.y - p2.y);
-      expect(d12).toBeCloseTo(d01, 8);
-      expect(d20).toBeCloseTo(d01, 8);
-    }
-  });
-});
-
-describe("triangleVertices: isosceles triangle in the dragged bounding region", () => {
+describe("triangleVertices: REPLAY-ONLY rule so previously saved triangles still render", () => {
   it("base spans the full width on the anchor's edge; apex is centred on the opposite edge", () => {
     const a = { x: 100, y: 100 };
     const b = { x: 300, y: 260 };
@@ -145,7 +103,7 @@ describe("boundsOf: all four drag directions give the same positive-size box", (
 
 describe("isMeaningfulShape: a click or degenerate drag creates nothing", () => {
   it("rejects a zero-length drag for every shape", () => {
-    for (const type of ["line", "rectangle", "ellipse", "triangle"]) {
+    for (const type of ["line", "rectangle", "ellipse"]) {
       expect(isMeaningfulShape(type, anchor, { ...anchor })).toBe(false);
     }
   });
@@ -160,7 +118,7 @@ describe("isMeaningfulShape: a click or degenerate drag creates nothing", () => 
   });
 
   it("rejects an invisible zero-height/width closed shape but accepts a real one", () => {
-    for (const type of ["rectangle", "ellipse", "triangle"]) {
+    for (const type of ["rectangle", "ellipse"]) {
       expect(isMeaningfulShape(type, anchor, { x: anchor.x + 80, y: anchor.y })).toBe(false);
       expect(isMeaningfulShape(type, anchor, { x: anchor.x, y: anchor.y + 80 })).toBe(false);
       expect(isMeaningfulShape(type, anchor, { x: anchor.x + 80, y: anchor.y + 60 })).toBe(true);
@@ -180,7 +138,7 @@ describe("paintShape: Outline strokes, Filled fills, one colour, no extra outlin
   const b = { x: 110, y: 70 };
 
   it("outline: strokes the boundary with the colour and width, never fills", () => {
-    for (const type of ["rectangle", "ellipse", "triangle"]) {
+    for (const type of ["rectangle", "ellipse"]) {
       const ctx = fakeCtx();
       paintShape(ctx, { type, mode: "outline", color: "#112233", lineWidth: 6 }, a, b);
       expect(ctx.stroke).toHaveBeenCalledTimes(1);
@@ -189,7 +147,7 @@ describe("paintShape: Outline strokes, Filled fills, one colour, no extra outlin
   });
 
   it("filled: fills with the one drawing colour and adds no outline", () => {
-    for (const type of ["rectangle", "ellipse", "triangle"]) {
+    for (const type of ["rectangle", "ellipse"]) {
       const ctx = fakeCtx();
       let fillColourAtFill = "";
       ctx.fill = vi.fn(() => { fillColourAtFill = ctx.fillStyle; });
@@ -209,7 +167,7 @@ describe("paintShape: Outline strokes, Filled fills, one colour, no extra outlin
     expect(ctx.lineTo).toHaveBeenCalledWith(b.x, b.y);
   });
 
-  it("traces the triangle through exactly its three vertices", () => {
+  it("a STORED triangle still traces through exactly its three vertices (legacy replay)", () => {
     const ctx = fakeCtx();
     paintShape(ctx, { type: "triangle", mode: "outline", color: "#000000", lineWidth: 2 }, a, b);
     const [p0, p1, p2] = triangleVertices(a, b);
@@ -234,13 +192,18 @@ describe("shapePixelBounds", () => {
 });
 
 describe("isValidShapeDescriptor", () => {
-  it("accepts the four types with a valid mode (line needs none)", () => {
+  it("accepts line, rectangle and ellipse with a valid mode (line needs none)", () => {
     expect(isValidShapeDescriptor({ type: "line" })).toBe(true);
     expect(isValidShapeDescriptor({ type: "line", mode: "outline" })).toBe(true);
-    for (const type of ["rectangle", "ellipse", "triangle"]) {
+    for (const type of ["rectangle", "ellipse"]) {
       expect(isValidShapeDescriptor({ type, mode: "outline" })).toBe(true);
       expect(isValidShapeDescriptor({ type, mode: "filled" })).toBe(true);
     }
+  });
+
+  it("rejects a NEW triangle: it is no longer a supported shape type", () => {
+    expect(isValidShapeDescriptor({ type: "triangle", mode: "outline" })).toBe(false);
+    expect(isValidShapeDescriptor({ type: "triangle", mode: "filled" })).toBe(false);
   });
 
   it("rejects unknown types, missing/unknown modes, a filled line, and non-objects", () => {

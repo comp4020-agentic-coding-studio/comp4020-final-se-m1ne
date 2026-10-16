@@ -27,7 +27,7 @@ const toolSizeSlider = document.getElementById("tool-size-slider");
 const toolSizeValue = document.getElementById("tool-size-value");
 const toolBrushButton = document.getElementById("tool-brush");
 const toolEraserButton = document.getElementById("tool-eraser");
-const SHAPE_TOOL_IDS = ["line", "rectangle", "ellipse", "triangle"];
+const SHAPE_TOOL_IDS = ["line", "rectangle", "ellipse"];
 const shapeToolButtons = Object.fromEntries(SHAPE_TOOL_IDS.map((id) => [id, document.getElementById(`tool-${id}`)]));
 const shapeModeControl = document.getElementById("shape-mode-control");
 const shapeModeButtons = {
@@ -149,8 +149,8 @@ let myOwnerId = null;
 let color = "#1d1d1d";
 let brushSizePx = 6;
 let eraserSizePx = 30;
-let mode = "brush"; // "brush" | "eraser" | "eyedropper" | "line" | "rectangle" | "ellipse" | "triangle"
-let shapeMode = "outline"; // "outline" | "filled" -- shared by rectangle/ellipse/triangle; Line has no mode
+let mode = "brush"; // "brush" | "eraser" | "eyedropper" | "line" | "rectangle" | "ellipse"
+let shapeMode = "outline"; // "outline" | "filled" -- shared by rectangle/ellipse; Line has no mode
 
 // One shared slider's meaning depends on which tool is active: each entry
 // owns its own range (matching the two permanent sliders' old min/max/step
@@ -176,7 +176,7 @@ const toolSizes = {
 };
 // Every shape tool uses the Brush size as its stroke width -- the same
 // variable and range, so switching Brush <-> a shape never changes the number.
-for (const id of ["line", "rectangle", "ellipse", "triangle"]) toolSizes[id] = toolSizes.brush;
+for (const id of ["line", "rectangle", "ellipse"]) toolSizes[id] = toolSizes.brush;
 
 // Applies the active tool's own range and current value to the one shared
 // slider -- called on every tool switch so min/max/value/display all update
@@ -269,6 +269,24 @@ function ensureLayer(ownerId) {
     layers.set(ownerId, layer);
   }
   return layer;
+}
+
+// A small off-screen canvas for REGIONAL repaints (an erase drag repaints only a ~60x60 box per frame).
+// Doing the per-op paint/clip/blit on the full 1920x1080 scratch cost several ms per overlapping op even
+// for a tiny region (and large shapes overlap almost every region); a region-sized surface is ~90x
+// cheaper and produces identical pixels. Grown on demand, never shrunk, reused every frame.
+let regionScratch = null; // { canvas, ctx }
+function ensureRegionScratch(width, height) {
+  if (!regionScratch) {
+    const c = document.createElement("canvas");
+    regionScratch = { canvas: c, ctx: c.getContext("2d") };
+  }
+  const c = regionScratch.canvas;
+  if (c.width < width || c.height < height) {
+    c.width = Math.max(c.width, width);
+    c.height = Math.max(c.height, height);
+  }
+  return regionScratch;
 }
 
 function ensureScratch() {
@@ -416,7 +434,11 @@ function repaintVisibleCanvas(region) {
   if (rw <= 0 || rh <= 0) return;
 
   ctx.clearRect(rx, ry, rw, rh);
-  const { canvas: scratchCanvas, ctx: scratchCtx } = ensureScratch();
+  // Regional repaint: work in a region-sized scratch whose origin is the region's top-left (ox, oy), so
+  // each op's paint/clip/blit touches only rw x rh pixels. A full repaint keeps the full-size scratch.
+  const { canvas: scratchCanvas, ctx: scratchCtx } = region ? ensureRegionScratch(rw, rh) : ensureScratch();
+  const ox = region ? rx : 0;
+  const oy = region ? ry : 0;
   const clipRect = region ? { x: rx, y: ry, width: rw, height: rh } : null;
   const now = Date.now(); // one shared instant for every op in this repaint, so nothing within a single pass can disagree
   for (const op of allOps) {
@@ -436,9 +458,14 @@ function repaintVisibleCanvas(region) {
     if (clipRect && !rectsIntersect(opPixelBounds(op), clipRect)) continue; // this op can't paint inside the dirty region at all
     const ownerLayer = layers.get(op.ownerId);
     if (!ownerLayer) continue;
-    scratchCtx.clearRect(rx, ry, rw, rh);
+    scratchCtx.clearRect(0, 0, rw, rh);
     scratchCtx.globalAlpha = opacity;
+    if (region) {
+      scratchCtx.save();
+      scratchCtx.translate(-ox, -oy); // paint in document coordinates, shifted so the region's origin is (0, 0)
+    }
     renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points, op.shape);
+    if (region) scratchCtx.restore();
     scratchCtx.globalAlpha = 1;
     scratchCtx.globalCompositeOperation = "destination-in";
     // If this op's owner has a remote erase gesture in progress right now,
@@ -451,9 +478,9 @@ function repaintVisibleCanvas(region) {
     // owner's artwork, overlapping or not -- same as the real, persisted
     // erase model this is standing in for.
     const clipSource = erasePreviewLayerFor(op.ownerId) ?? ownerLayer.canvas;
-    scratchCtx.drawImage(clipSource, rx, ry, rw, rh, rx, ry, rw, rh);
+    scratchCtx.drawImage(clipSource, rx, ry, rw, rh, 0, 0, rw, rh);
     scratchCtx.globalCompositeOperation = "source-over";
-    ctx.drawImage(scratchCanvas, rx, ry, rw, rh, rx, ry, rw, rh);
+    ctx.drawImage(scratchCanvas, 0, 0, rw, rh, rx, ry, rw, rh);
   }
   if (myOwnerId !== null) {
     // Oldest-to-newest: each finished-but-unconfirmed gesture is strictly
@@ -1133,7 +1160,7 @@ function appendToGesture(points) {
   queueFrame();
 }
 
-// --- Shape gestures (Line / Rectangle / Ellipse / Triangle) -------------------
+// --- Shape gestures (Line / Rectangle / Ellipse) ------------------------------
 // A shape gesture reuses `current` so Undo/Redo guards, pending-op bookkeeping,
 // persistence and the realtime "op" broadcast all work exactly as for a brush
 // stroke. Its `points` is always [anchor, end] (document-normalised), where
@@ -1524,7 +1551,7 @@ function setMode(newMode) {
     shapeToolButtons[id].setAttribute("aria-pressed", String(mode === id));
   }
   // The one Outline/Filled selector shows only for the three closed shapes.
-  shapeModeControl.hidden = !(mode === "rectangle" || mode === "ellipse" || mode === "triangle");
+  shapeModeControl.hidden = !(mode === "rectangle" || mode === "ellipse");
   toolEyedropperButton.classList.toggle("selected", mode === "eyedropper");
   toolBrushButton.setAttribute("aria-pressed", String(mode === "brush"));
   toolEraserButton.setAttribute("aria-pressed", String(mode === "eraser"));
