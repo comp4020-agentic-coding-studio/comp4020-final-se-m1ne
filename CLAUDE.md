@@ -20,15 +20,21 @@ Every change should support these priorities. Do not add features simply to make
 - Preserve working behaviour that is unrelated to the task.
 - Do not introduce a new drawing model, framework, library or major UI redesign without explicit approval.
 - If a request is unclear, ask rather than inventing extra requirements.
+- Do not refactor, reformat or optimize unrelated code while implementing a focused request.
 
 ## Drawing behaviour
 
 - Drawing must follow the pointer smoothly and use consistent coordinates.
 - Browser resizing, zooming and panning must not change where existing artwork belongs.
-- Brush and eraser behaviour must remain predictable at different zoom levels.
+- Brush, airbrush, paint bucket and eraser behaviour must remain predictable at different zoom levels.
 - An eraser must remove only the affected parts of the current participant's artwork, not entire strokes or other people's pixels.
 - Undo and redo must affect only the current participant's own actions.
-- Do not replace freehand drawing with a pixel-grid editor or add professional painting tools unless specifically requested.
+- Preserve the distinction between the pixel-art editor and the legacy freehand editor. Do not modify one editor when a request concerns only the other.
+- Freehand drawing must respect the selected layer, fixed layer stacking order and per-user layer visibility.
+- Drawing on a lower layer must never cover artwork on a visible upper layer, regardless of operation order.
+- Preserve the existing paint bucket fill behaviour, including its one-pixel coverage expansion.
+- Live previews, committed operations and replayed artwork must produce consistent results.
+- Do not introduce pressure sensitivity, additional painting tools or other advanced features unless specifically requested.
 - A visual improvement is not successful if it makes basic drawing slower or less reliable.
 
 ## Real-time collaboration
@@ -61,25 +67,35 @@ Every change should support these priorities. Do not add features simply to make
 - The Welcome flow must explain public and private drawing and allow a guest nickname and cursor colour.
 - Keep the drawing workspace simple and readable. Avoid adding unnecessary controls or panels.
 - Keep the public canvas visually clear in both light and dark system themes.
-- Preserve the existing layout and colour choices unless a redesign is explicitly requested.
+- Preserve the existing layout, icons and colour choices unless a redesign is explicitly requested.
 - Support mouse, touch and keyboard interactions where applicable.
 - Check the desktop and mobile layouts after changes that affect the interface.
+- Private-room navigation must preserve the existing confirmation that reminds users to save their room code before leaving.
 
 ## Testing and checking
 
-Automated tests are necessary, but they are not enough to prove drawing feels right.
+Automated tests are necessary, but they are not enough to prove drawing feels right or that canvas pixels are rendered correctly.
 
 For changes affecting drawing or collaboration:
 
-1. Run the relevant automated tests.
+1. Run the relevant automated tests and typecheck.
 2. Check drawing, erasing, undo and redo.
-3. Test with two separate browser sessions.
+3. Test with two separate browser sessions when browser testing is explicitly permitted.
 4. Check whether remote strokes and erasing appear during the action.
 5. Resize the browser and check cursor positions and existing artwork.
 6. Refresh and confirm saved artwork remains correct.
 7. Check that public and private rooms remain isolated.
+8. For layer-related changes, check actual visible stacking, layer visibility and repeated drawing across different layers.
 
-If a manual interaction cannot be tested, report that limitation clearly. Do not claim it works based only on passing automated tests.
+Tests that mock Canvas APIs or only inspect drawing-call order do not establish pixel-level correctness. If manual or real-browser verification is unavailable, report it as unverified rather than claiming visual success.
+
+### Browser safety
+
+- Do not launch, navigate, refresh, automate or close Microsoft Edge without explicit permission.
+- Never close the user's existing Edge windows, tabs or browser processes.
+- Do not use Playwright, Puppeteer or other browser automation without explicit permission.
+- Do not terminate browser processes or interfere with the user's current browser session.
+- Prefer non-browser automated tests unless browser testing has been specifically requested.
 
 ## Working with the agent
 
@@ -92,10 +108,13 @@ If a manual interaction cannot be tested, report that limitation clearly. Do not
 - Do not deploy after every small change. Deploy when preparing a requested release.
 - Do not change or move existing crit tags.
 - Do not commit local IDE settings, credentials, `.claude*` files or unrelated temporary files.
-- After each completed logical change, create a focused Git commit with a descriptive message.
+- Preserve unrelated uncommitted changes. Do not reset, restore, stash or discard them.
+- After each completed logical change, stage only task-related files and create a focused Git commit with a descriptive message.
+- Do not use `git add .`. Do not push or deploy unless explicitly requested.
+- Keep final reports concise: changed files, verification results, blockers and commit hash.
 
 ## Definition of done
 
 A change is complete only when the requested behaviour works, relevant tests pass, unrelated features still behave correctly, and any known limitations are reported.
 
-A feature that passes tests but makes drawing harder to use is not finished.
+A feature that passes tests but makes drawing harder to use is not finished. If real-browser visual verification has not been performed, state that limitation explicitly.

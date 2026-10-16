@@ -1,6 +1,6 @@
 # Shared Canvas
 
-Shared Canvas is a real-time collaborative drawing website where people can create something together without accounts. Visitors first see the live Public Canvas, then enter with a nickname and cursor colour. They can draw on the public canvas or create a private room and invite friends using a short code.
+Shared Canvas is a real-time collaborative drawing website where people can create something together without accounts. Visitors can explore the Public Canvas, join with a nickname and cursor colour, or create a private room and invite friends using a short code. The project supports both pixel drawing and freehand drawing, with different tools and experiences for different spaces.
 
 ## What good means
 
@@ -16,15 +16,15 @@ FlockMod demonstrates the appeal of accessible browser-based collaborative drawi
 
 ## Enforced and judged
 
-Automated checks cover persistent operations, ownership restrictions, deterministic ordering, undo/redo, fading, room isolation, lifecycle rules and real-time event handling. Server-sent events deliver changes to other open sessions without requiring a refresh. The application also keeps drawing operations separate from temporary cursor and in-progress stroke previews.
+Automated checks cover persistent operations, ownership restrictions, deterministic ordering, undo/redo, fading, room isolation, lifecycle rules and real-time event handling. They also cover drawing behaviour such as layer ordering, shape rendering and fill operations. Server-sent events deliver changes to other open sessions without requiring a refresh. The application keeps persistent drawing operations separate from temporary cursor and in-progress stroke previews.
 
-Other qualities require human judgement. I test with separate browser sessions to see whether strokes appear promptly, whether remote cursors are understandable, whether erasing behaves predictably, and whether newcomers can understand the difference between public and private spaces. I also check that the interface remains usable at different browser sizes.
+Other qualities require human judgement. I test with separate browser sessions to see whether strokes appear promptly, whether remote cursors are understandable, whether erasing behaves predictably, and whether newcomers can understand the difference between public and private spaces. I also check drawing tools, layer behaviour and interface usability at different browser sizes.
 
 ## Current boundaries
 
-Shared Canvas provides basic freehand drawing, erasing, colour selection, zoom and navigation, guest profiles, live cursors and shared rooms. It does not aim to provide a complete professional painting toolkit. Advanced brushes, layers, selection tools, pressure sensitivity, chat and permanent accounts are outside the current version.
+Shared Canvas supports pixel drawing and freehand drawing, with tools including pencils, airbrushes, erasers, paint buckets, shape tools, colour selection and zoom. The freehand editor also supports multiple layers with independent visibility and selection. Guest profiles, live cursors, undo/redo and shared rooms support collaboration without permanent accounts.
 
-The remaining work focuses on reliability and clarity, particularly consistent synchronization and cursor positioning when participants use different window sizes.
+The project does not aim to replace a full professional painting application. Advanced selection and transformation tools, pressure sensitivity, chat and permanent accounts remain outside the current version.
 
 ## References
 
