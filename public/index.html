@@ -238,6 +238,7 @@
           </div>
         </div>
 
+        <div id="right-sidebar">
         <div id="colour-group">
           <span class="group-label">Colours</span>
           <div class="group-controls">
@@ -313,8 +314,19 @@
             <button type="button" class="swatch" data-color="#1D1D1D" style="background:#1D1D1D" aria-label="Black" title="Black"></button>
           </div>
         </div>
+
+        <div id="layers-group">
+          <span class="group-label">Layers</span>
+          <!-- Populated imperatively by public/app.js's renderLayerPanel --
+               layer cards are data-driven (name/visibility/selected state are
+               personal, local-only settings, never static markup). -->
+          <div id="layer-list" role="group" aria-label="Layers"></div>
+        </div>
+        </div>
       </div>
     </div>
+
+    <div id="layer-hidden-notice" aria-live="polite" hidden></div>
 
     <div id="colour-popover" role="dialog" aria-label="Edit colour" hidden>
       <div id="colour-popover-header">

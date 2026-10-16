@@ -136,7 +136,7 @@ describe("Part 3: incremental in-progress stroke streaming", () => {
     // A remote collaborator's in-progress stroke.
     source.emit("stroke", {
       ownerId: "owner-REMOTE",
-      kind: "draw",
+      kind: "draw", layerId: "lineart",
       color: "#ff0000",
       size: 0.02,
       points: [{ x: 0.1, y: 0.1 }, { x: 0.2, y: 0.2 }],
@@ -150,7 +150,7 @@ describe("Part 3: incremental in-progress stroke streaming", () => {
     // My own in-progress stroke is never rendered as a "remote" preview.
     source.emit("stroke", {
       ownerId: MY_OWNER_ID,
-      kind: "draw",
+      kind: "draw", layerId: "lineart",
       color: "#000000",
       size: 0.02,
       points: [{ x: 0.5, y: 0.5 }],
@@ -165,7 +165,7 @@ describe("Part 3: incremental in-progress stroke streaming", () => {
       id: "remote-op-1",
       seq: 1,
       ownerId: "owner-REMOTE",
-      kind: "draw",
+      kind: "draw", layerId: "lineart",
       color: "#ff0000",
       size: 0.02,
       points: [{ x: 0.1, y: 0.1 }, { x: 0.2, y: 0.2 }],
@@ -182,7 +182,7 @@ describe("Part 3: incremental in-progress stroke streaming", () => {
 
     source.emit("stroke", {
       ownerId: "owner-GONE",
-      kind: "draw",
+      kind: "draw", layerId: "lineart",
       color: "#00ff00",
       size: 0.02,
       points: [{ x: 0.3, y: 0.3 }],
@@ -217,7 +217,7 @@ describe("Remote erase preview (reversible compositing)", () => {
       id: `seed-${ownerId}`,
       seq,
       ownerId,
-      kind: "draw",
+      kind: "draw", layerId: "lineart",
       color: "#222222",
       size: 0.04,
       points: [{ x: 0.2, y: 0.2 }, { x: 0.6, y: 0.6 }],
@@ -288,7 +288,7 @@ describe("Remote erase preview (reversible compositing)", () => {
       id: "unrelated-op",
       seq: 3,
       ownerId: "owner-UNRELATED",
-      kind: "draw",
+      kind: "draw", layerId: "lineart",
       color: "#333333",
       size: 0.02,
       points: [{ x: 0.5, y: 0.5 }],
@@ -345,7 +345,7 @@ describe("Remote erase preview (reversible compositing)", () => {
       id: "b-op-2",
       seq: 3,
       ownerId: "owner-B",
-      kind: "draw",
+      kind: "draw", layerId: "lineart",
       color: "#00aaff",
       size: 0.02,
       points: [{ x: 0.35, y: 0.35 }],

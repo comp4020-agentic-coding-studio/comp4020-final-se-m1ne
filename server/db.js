@@ -105,6 +105,20 @@ if (!columnExists("ops", "shape")) {
   db.exec("ALTER TABLE ops ADD COLUMN shape TEXT");
 }
 
+// Document-structural layer assignment (Public: "colour"/"lineart"; a Private
+// Room: "layer1".."layer4" -- see public/layers.js for the fixed id lists).
+// Additive and idempotent like every migration above: NULL for every row
+// that predates this column, which public/app.js treats as "this op belongs
+// to the bottom-most layer" (a deterministic default, not a rewrite -- no
+// historical row's own layer_id is ever touched by this migration or by
+// anything that runs after it). Validated against the fixed per-canvas id
+// list in server/index.js, not by a CHECK constraint here, for the same
+// reason doc_kind isn't: ALTER TABLE can't add one to match a fresh CREATE
+// TABLE's constraint.
+if (!columnExists("ops", "layer_id")) {
+  db.exec("ALTER TABLE ops ADD COLUMN layer_id TEXT");
+}
+
 // A room is just its code plus when it was created -- no name, owner,
 // membership, or settings: nothing this slice needs. A room's existence here
 // is also what lets "is this a real room?" be answered before ever touching
@@ -249,7 +263,7 @@ export const STALE_TIMEOUT_MS = 90_000;
 export const ROOM_EMPTY_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 const insertOpStmt = db.prepare(
-  "INSERT INTO ops (id, owner_id, kind, color, size, points, created_at, room_id, doc_kind, shape) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "INSERT INTO ops (id, owner_id, kind, color, size, points, created_at, room_id, doc_kind, shape, layer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 );
 
 // width/height are NULL for a legacy freehand room (the default every
@@ -343,7 +357,7 @@ function migrateLegacyStrokesIfPresent() {
   db.exec("BEGIN");
   try {
     for (const row of legacyRows) {
-      insertOpStmt.run(row.id, row.owner_id, "draw", row.color, row.width, row.points, row.created_at, null, "freehand", null);
+      insertOpStmt.run(row.id, row.owner_id, "draw", row.color, row.width, row.points, row.created_at, null, "freehand", null, null);
     }
     db.exec("DROP TABLE strokes");
     db.exec("COMMIT");
@@ -367,6 +381,12 @@ function rowToOp(row) {
     createdAt: row.created_at,
     roomId: row.room_id,
     docKind: row.doc_kind,
+    // Always included, unlike shape below: a row with no layer_id (every op
+    // that predates the layer system) comes back as layerId: null rather than
+    // an absent key, so client code has one consistent field to read a
+    // backward-compatible default from (see public/layers.js's
+    // effectiveLayerId), instead of needing an `in` check.
+    layerId: row.layer_id,
     ...(row.shape ? { shape: JSON.parse(row.shape) } : {}),
   };
 }
@@ -378,10 +398,13 @@ function rowToOp(row) {
 // existing caller (the freehand draw/erase routes, and every direct-db.js
 // test predating this step) keeps inserting exactly what it always has --
 // only the new pixel routes (server/index.js) ever pass "pixel" explicitly.
-export function insertOp({ id, ownerId, kind, color, size, points, createdAt, roomId = null, docKind = "freehand", shape = null }) {
+export function insertOp({
+  id, ownerId, kind, color, size, points, createdAt, roomId = null, docKind = "freehand", shape = null, layerId = null,
+}) {
   const info = insertOpStmt.run(
     id, ownerId, kind, color ?? null, size, JSON.stringify(points), createdAt, roomId, docKind,
     shape ? JSON.stringify(shape) : null,
+    layerId,
   );
   return Number(info.lastInsertRowid);
 }
@@ -403,14 +426,14 @@ export function insertOp({ id, ownerId, kind, color, size, points, createdAt, ro
 export function listOps(roomId = null, docKind = "freehand") {
   const rows = db
     .prepare(
-      "SELECT seq, id, owner_id, kind, color, size, points, created_at, room_id, doc_kind, shape " +
+      "SELECT seq, id, owner_id, kind, color, size, points, created_at, room_id, doc_kind, shape, layer_id " +
         "FROM ops WHERE room_id IS ? AND doc_kind = ? AND active = 1 ORDER BY seq ASC",
     )
     .all(roomId, docKind);
   return rows.map(rowToOp);
 }
 
-const OP_COLUMNS = "seq, id, owner_id, kind, color, size, points, created_at, room_id, doc_kind, shape";
+const OP_COLUMNS = "seq, id, owner_id, kind, color, size, points, created_at, room_id, doc_kind, shape, layer_id";
 
 // `room_id IS ?` (not `=`), exactly like listOps above: a null roomId (the
 // Public scope) must match rows where room_id is actually NULL, and `=`

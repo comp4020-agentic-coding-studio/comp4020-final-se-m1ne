@@ -18,6 +18,13 @@ import {
   fitZoom,
   stepZoom,
 } from "./viewport.js";
+import {
+  layerIdsFor,
+  defaultLayerNamesFor,
+  effectiveLayerId,
+  layerSettingsStorageKey,
+  parseLayerSettings,
+} from "./layers.js";
 
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
@@ -69,6 +76,8 @@ const guestSetupConfirmButton = document.getElementById("guest-setup-confirm");
 const remoteCursorsContainer = document.getElementById("remote-cursors");
 const remoteStrokePreviewCanvas = document.getElementById("remote-stroke-preview");
 const remoteStrokePreviewCtx = remoteStrokePreviewCanvas.getContext("2d");
+const layerListEl = document.getElementById("layer-list");
+const layerHiddenNoticeEl = document.getElementById("layer-hidden-notice");
 
 // The one place "which canvas is this" is decided: a room page is served at
 // /room/CODE (server/index.js's GET /room/:code, which 404s before ever
@@ -108,10 +117,34 @@ const redoUrl = roomCode ? `/api/rooms/${roomCode}/redo` : "/api/ops/redo";
 // layer, which is exactly what later same-owner draws get clipped against --
 // so destination-out is never applied to the shared canvas and one owner's
 // erase can never remove another owner's pixels.
-let layers = new Map(); // ownerId -> { canvas, ctx }, each owner's own current-state mask
+let layers = new Map(); // "ownerId:layerId" -> { canvas, ctx }, each owner's own current-state mask on that one layer
 let scratch = null; // { canvas, ctx }, reused per draw-op during a repaint
-let allOps = []; // op[], the full history in server seq order -- the only thing that controls stacking order
+let allOps = []; // op[], the full history in server seq order
 let opsByOwner = new Map(); // ownerId -> op[] in seq order, used only to rebuild each owner's own layer
+
+// allOps sorted for rendering: (layer index ascending, seq ascending) --
+// seq alone is correct *within* one layer (later same-layer draws go on top,
+// regardless of owner), but does not guarantee a lower document-structural
+// layer stays under a higher one that happens to have an earlier seq. Memoized
+// and invalidated (set to null) at every one of allOps's own mutation points
+// below (loadOps, the "sync"/"op" SSE handlers, persistGesture's success
+// path) so a hot path like a live erase's per-frame regional repaint never
+// re-sorts the full history every frame -- only the first repaint after
+// allOps actually changed pays for one.
+let renderOrderOps = null;
+function invalidateRenderOrder() {
+  renderOrderOps = null;
+}
+function getRenderOrderOps() {
+  if (renderOrderOps === null) {
+    const ids = layerIdsFor(isPublicCanvas);
+    renderOrderOps = [...allOps].sort((a, b) => {
+      const layerDiff = ids.indexOf(effectiveLayerId(a, isPublicCanvas)) - ids.indexOf(effectiveLayerId(b, isPublicCanvas));
+      return layerDiff !== 0 ? layerDiff : a.seq - b.seq;
+    });
+  }
+  return renderOrderOps;
+}
 
 // Ephemeral, in-progress remote strokes -- never persisted, never touching
 // allOps/opsByOwner/any real layer's own canvas. Declared here (ahead of
@@ -129,15 +162,17 @@ const STROKE_PREVIEW_END_GRACE_MS = 1500; // grace window for the real "op" to a
 
 // Returns a temporary, fully-recomputed "what this owner's layer would look
 // like if their current in-progress remote erase gesture had already fully
-// landed" canvas, or null if this owner has no active erase preview right
-// now. Never mutates layers.get(ownerId)'s own canvas (the owner's real,
-// authoritative mask) -- only ever reads it, once, to seed a disposable copy
-// (see updateErasePreviewLayer) -- so persisted state can never be corrupted
-// by however many times this is consulted, or by a preview that's later
-// abandoned/cancelled/superseded.
-function erasePreviewLayerFor(ownerId) {
+// landed" canvas, or null if this owner has no active erase preview on this
+// exact layer right now (an owner can only have one live gesture at a time,
+// so a preview for a different layer than the one being asked about is not a
+// match). Never mutates layers.get(ownerLayerKey(...))'s own canvas (the
+// owner's real, authoritative mask) -- only ever reads it, once, to seed a
+// disposable copy (see updateErasePreviewLayer) -- so persisted state can
+// never be corrupted by however many times this is consulted, or by a
+// preview that's later abandoned/cancelled/superseded.
+function erasePreviewLayerFor(ownerId, layerId) {
   const preview = remoteStrokePreviews.get(ownerId);
-  if (!preview || preview.kind !== "erase") return null;
+  if (!preview || preview.kind !== "erase" || preview.layerId !== layerId) return null;
   return preview.previewLayerCanvas ?? null;
 }
 
@@ -259,14 +294,24 @@ function toPixels(point) {
   return documentPointToPixel(point, DOCUMENT_WIDTH, DOCUMENT_HEIGHT);
 }
 
-function ensureLayer(ownerId) {
-  let layer = layers.get(ownerId);
+// Keyed by (ownerId, layerId): an owner's erase must only ever affect that
+// owner's own ops on that one document-structural layer, never that same
+// owner's content on a different layer (see the module comment above) -- so
+// each (owner, layer) pair needs its own independent mask, not one mask per
+// owner shared across every layer they've ever drawn on.
+function ownerLayerKey(ownerId, layerId) {
+  return `${ownerId}:${layerId}`;
+}
+
+function ensureLayer(ownerId, layerId) {
+  const key = ownerLayerKey(ownerId, layerId);
+  let layer = layers.get(key);
   if (!layer) {
     const layerCanvas = document.createElement("canvas");
     layerCanvas.width = canvas.width;
     layerCanvas.height = canvas.height;
     layer = { canvas: layerCanvas, ctx: layerCanvas.getContext("2d") };
-    layers.set(ownerId, layer);
+    layers.set(key, layer);
   }
   return layer;
 }
@@ -340,27 +385,48 @@ function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points, shape)
   layerCtx.restore();
 }
 
-function rebuildLayerFromOps(ownerId) {
-  const layer = ensureLayer(ownerId);
+function rebuildLayerFromOps(ownerId, layerId) {
+  const layer = ensureLayer(ownerId, layerId);
   layer.canvas.width = canvas.width;
   layer.canvas.height = canvas.height;
-  const ops = opsByOwner.get(ownerId) ?? [];
+  const ops = (opsByOwner.get(ownerId) ?? []).filter((op) => effectiveLayerId(op, isPublicCanvas) === layerId);
   for (const op of ops) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape);
 }
 
+// Every distinct (ownerId, layerId) pair actually present in allOps -- driven
+// from the real op history, not a fixed cross-product of every owner with
+// every one of this canvas's layers, so an owner who never drew on some
+// layer never gets an empty canvas created for it.
+function ownerLayerPairsInOps() {
+  const pairs = new Map(); // ownerId -> Set<layerId>
+  for (const op of allOps) {
+    const layerId = effectiveLayerId(op, isPublicCanvas);
+    if (!pairs.has(op.ownerId)) pairs.set(op.ownerId, new Set());
+    pairs.get(op.ownerId).add(layerId);
+  }
+  return pairs;
+}
+
 function rebuildAllLayers() {
-  for (const ownerId of opsByOwner.keys()) rebuildLayerFromOps(ownerId);
+  for (const [ownerId, layerIds] of ownerLayerPairsInOps()) {
+    for (const layerId of layerIds) rebuildLayerFromOps(ownerId, layerId);
+  }
   if (myOwnerId !== null) {
-    const layer = ensureLayer(myOwnerId);
-    // Not yet in opsByOwner (persistGesture hasn't resolved), so
-    // rebuildLayerFromOps above can't have replayed these -- without this,
-    // a resize mid-persist would drop a pending gesture from the owner's own
-    // mask, and once persistence did land it'd render clipped away to
-    // nothing on the very next ops-driven repaint.
-    for (const op of pendingOps) renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape);
+    // Not yet in opsByOwner/allOps (persistGesture hasn't resolved), so the
+    // loop above can't have replayed these -- without this, a resize
+    // mid-persist would drop a pending gesture from the owner's own mask,
+    // and once persistence did land it'd render clipped away to nothing on
+    // the very next ops-driven repaint. Grouped by each pending op's own
+    // layerId (not just current.layerId) since a user can switch layers
+    // between one finished-but-unconfirmed gesture and the next.
+    for (const op of pendingOps) {
+      const layer = ensureLayer(myOwnerId, effectiveLayerId(op, isPublicCanvas));
+      renderPathOnLayer(layer.ctx, op.kind, op.color, op.size, op.points, op.shape);
+    }
     // A shape in progress is not artwork yet: it lives only on the preview overlay until pointer-up
     // commits it (endGesture), so a rebuild must not paint it into the layer.
     if (current && !current.shape) {
+      const layer = ensureLayer(myOwnerId, current.layerId);
       renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, current.points);
       currentLastRenderedIndex = current.points.length - 1;
     }
@@ -376,12 +442,14 @@ function rebuildAllLayers() {
 function opNormalizedBounds(op) {
   if (!op._normBounds && op.shape && op.points.length === 2) {
     const [p, q] = op.points;
-    const pad = op.size / 2 + 2 / canvas.width;
+    // Stroke width is normalized by canvas WIDTH, so the same pixel padding is a larger fraction on y.
+    const padX = op.size / 2 + 2 / canvas.width;
+    const padY = (op.size / 2) * (canvas.width / canvas.height) + 2 / canvas.height;
     op._normBounds = {
-      minX: Math.min(p.x, q.x) - pad,
-      minY: Math.min(p.y, q.y) - pad,
-      maxX: Math.max(p.x, q.x) + pad,
-      maxY: Math.max(p.y, q.y) + pad,
+      minX: Math.min(p.x, q.x) - padX,
+      minY: Math.min(p.y, q.y) - padY,
+      maxX: Math.max(p.x, q.x) + padX,
+      maxY: Math.max(p.y, q.y) + padY,
     };
   }
   if (!op._normBounds) {
@@ -392,8 +460,9 @@ function opNormalizedBounds(op) {
       if (p.y < minY) minY = p.y;
       if (p.y > maxY) maxY = p.y;
     }
-    const pad = op.size / 2;
-    op._normBounds = { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+    const padX = op.size / 2;
+    const padY = padX * (canvas.width / canvas.height);
+    op._normBounds = { minX: minX - padX, minY: minY - padY, maxX: maxX + padX, maxY: maxY + padY };
   }
   return op._normBounds;
 }
@@ -441,68 +510,102 @@ function repaintVisibleCanvas(region) {
   const oy = region ? ry : 0;
   const clipRect = region ? { x: rx, y: ry, width: rw, height: rh } : null;
   const now = Date.now(); // one shared instant for every op in this repaint, so nothing within a single pass can disagree
-  for (const op of allOps) {
-    if (op.kind !== "draw") continue; // an erase op's only effect is already baked into its owner's layer, below, and never fades
-    // Fading is applied here, and only here: to a draw op's own stroke color,
-    // right before it gets clipped against its owner's layer mask below. The
-    // mask itself (built in rebuildLayerFromOps) is never faded -- it stays
-    // permanent and full-strength, so an owner can always erase a faded or
-    // fully-invisible stroke exactly as if it were new, and nothing erased
-    // can ever reappear by aging back into visibility. A fully-faded op is
-    // skipped outright here -- still persisted (see public/fade.js), just no
-    // longer painted. effectiveOpacity is 1 unconditionally on a Private
-    // Room page (isPublicCanvas is false there), so room content never
-    // fades regardless of its createdAt.
-    const opacity = effectiveOpacity(op, now, isPublicCanvas);
-    if (opacity <= 0) continue;
-    if (clipRect && !rectsIntersect(opPixelBounds(op), clipRect)) continue; // this op can't paint inside the dirty region at all
-    const ownerLayer = layers.get(op.ownerId);
-    if (!ownerLayer) continue;
-    scratchCtx.clearRect(0, 0, rw, rh);
-    scratchCtx.globalAlpha = opacity;
-    if (region) {
-      scratchCtx.save();
-      scratchCtx.translate(-ox, -oy); // paint in document coordinates, shifted so the region's origin is (0, 0)
-    }
-    renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points, op.shape);
-    if (region) scratchCtx.restore();
-    scratchCtx.globalAlpha = 1;
-    scratchCtx.globalCompositeOperation = "destination-in";
-    // If this op's owner has a remote erase gesture in progress right now,
-    // clip against the temporary, disposable preview of their post-erase
-    // layer instead of their real one -- the only reason a progressive
-    // remote erase is visible at all before the gesture's own authoritative
-    // op lands. Every other owner's ops are completely unaffected: this is
-    // looked up per-op, keyed strictly by that op's own ownerId, so one
-    // owner's in-progress erase can never clip (or fail to clip) another
-    // owner's artwork, overlapping or not -- same as the real, persisted
-    // erase model this is standing in for.
-    const clipSource = erasePreviewLayerFor(op.ownerId) ?? ownerLayer.canvas;
-    scratchCtx.drawImage(clipSource, rx, ry, rw, rh, 0, 0, rw, rh);
+  // Deterministic layer-by-layer composite, bottom to top. For each layer: every committed draw op in seq
+  // order (clipped by its owner's own layer mask, faded), THEN that layer's not-yet-committed content
+  // (this viewer's pendingOps, then the in-progress stroke/shape, then remote draw previews). Nothing of a
+  // lower layer is ever drawn after anything of a higher layer, so layer order always beats drawing time.
+  const ids = layerIdsFor(isPublicCanvas);
+  const opsByLayer = new Map(ids.map((id) => [id, []]));
+  for (const op of getRenderOrderOps()) {
+    if (op.kind === "draw") opsByLayer.get(effectiveLayerId(op, isPublicCanvas))?.push(op); // an erase op's only effect is already baked into its owner's layer mask and it never fades
+  }
+
+  // Every op/preview starts from a fully transparent scratch in the default compositing state, so nothing
+  // from the previous one (alpha, composite mode, transform, clip) can leak into this one.
+  const beginScratch = (alpha) => {
+    scratchCtx.setTransform(1, 0, 0, 1, 0, 0);
     scratchCtx.globalCompositeOperation = "source-over";
+    scratchCtx.globalAlpha = 1;
+    scratchCtx.clearRect(0, 0, rw, rh);
+    scratchCtx.save();
+    scratchCtx.translate(-ox, -oy); // paint in document coordinates, shifted so the region's origin is (0, 0)
+    scratchCtx.globalAlpha = alpha;
+  };
+  const blitScratch = () => {
+    scratchCtx.globalCompositeOperation = "source-over";
+    scratchCtx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
     ctx.drawImage(scratchCanvas, 0, 0, rw, rh, rx, ry, rw, rh);
-  }
-  if (myOwnerId !== null) {
-    // Oldest-to-newest: each finished-but-unconfirmed gesture is strictly
-    // newer than the ones before it (it couldn't start until the last one
-    // ended), and the in-progress gesture, if any, is newer still -- so
-    // painting in this order and always unclipped reproduces the same
-    // stacking the eventual allOps-driven replay will show once persistence
-    // catches up, with nothing here waiting on it.
-    for (const op of pendingOps) {
-      renderPathOnLayer(ctx, "draw", op.color, op.size, op.points, op.shape);
+  };
+  // Unmasked live content (never clipped by an owner layer mask: nothing erases it until it is committed).
+  // Its points keep growing while it is live, so its bounds are computed fresh (opPixelBounds caches).
+  const compositeLive = (item) => {
+    const bounds = opPixelBounds({ points: item.points, size: item.size, shape: item.shape });
+    if (clipRect && !rectsIntersect(bounds, clipRect)) return;
+    beginScratch(1);
+    renderPathOnLayer(scratchCtx, "draw", item.color, item.size, item.points, item.shape);
+    scratchCtx.restore();
+    blitScratch();
+  };
+
+  for (const layerId of ids) {
+    if (layerSettings.hidden[layerId]) continue; // this viewer has locally hidden this layer -- never touches allOps/the server
+    for (const op of opsByLayer.get(layerId)) {
+      // Fading is applied here, and only here: to a draw op's own stroke, right before it gets clipped against
+      // its owner's layer mask below. The mask (rebuildLayerFromOps) is never faded, so an owner can always
+      // erase a faded stroke and nothing erased can reappear by aging back in. A fully faded op is skipped
+      // (still persisted, see public/fade.js). effectiveOpacity is 1 on a Private Room, so rooms never fade.
+      const opacity = effectiveOpacity(op, now, isPublicCanvas);
+      if (opacity <= 0) continue;
+      if (clipRect && !rectsIntersect(opPixelBounds(op), clipRect)) continue; // this op can't paint inside the dirty region at all
+      const ownerLayer = layers.get(ownerLayerKey(op.ownerId, layerId));
+      if (!ownerLayer) continue;
+      beginScratch(opacity);
+      renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points, op.shape);
+      scratchCtx.restore(); // back to the untransformed, default state for the mask step
+      scratchCtx.globalAlpha = 1;
+      scratchCtx.globalCompositeOperation = "destination-in";
+      // While this op's owner has a remote erase in progress, clip against the disposable preview of their
+      // post-erase layer instead of the real one (keyed strictly by this op's own owner + layer, so one
+      // owner's erase can never affect another owner's artwork).
+      const clipSource = erasePreviewLayerFor(op.ownerId, layerId) ?? ownerLayer.canvas;
+      scratchCtx.drawImage(clipSource, rx, ry, rw, rh, 0, 0, rw, rh);
+      blitScratch();
     }
-    // Same rule as rebuildAllLayers: an unfinished shape is previewed on the overlay only. Painting its
-    // two defining corners here as a freehand polyline would stamp a stray diagonal onto the real canvas.
-    if (current && current.kind === "draw" && !current.shape) {
-      renderPathOnLayer(ctx, "draw", current.color, current.size, current.points);
+    if (myOwnerId !== null) {
+      for (const op of pendingOps) {
+        if (effectiveLayerId(op, isPublicCanvas) === layerId) compositeLive(op);
+      }
+      // A freehand stroke in progress; an unfinished shape on the top layer stays on the overlay canvas
+      // (nothing is above it), but on a lower layer it is composited here so higher layers stay above it.
+      if (current && current.kind === "draw" && current.layerId === layerId && (!current.shape || !isTopLayerId(layerId))) {
+        compositeLive(current);
+      }
+    }
+    for (const preview of remoteStrokePreviews.values()) {
+      if (preview.kind === "erase" || preview.layerId !== layerId || !remotePreviewUsesVisibleCanvas(preview)) continue;
+      compositeLive(preview);
     }
   }
+}
+
+// A remote draw preview on the top layer can sit on the overlay canvas (nothing is above it). One on a
+// lower layer is composited into the visible canvas by repaintVisibleCanvas so higher layers stay above it.
+function remotePreviewUsesVisibleCanvas(preview) {
+  const ids = layerIdsFor(isPublicCanvas);
+  return preview.layerId !== ids[ids.length - 1];
+}
+
+function isTopLayerId(layerId) {
+  const ids = layerIdsFor(isPublicCanvas);
+  return layerId === ids[ids.length - 1];
 }
 
 async function loadOps() {
   const res = await fetch(opsUrl);
   allOps = await res.json(); // already server-seq-ordered; this exact array (not owner grouping) drives stacking order
+  invalidateRenderOrder();
   opsByOwner = new Map();
   layers = new Map();
   for (const op of allOps) {
@@ -553,6 +656,7 @@ function startRealtimeSync() {
 
   source.addEventListener("sync", (event) => {
     allOps = JSON.parse(event.data).ops;
+    invalidateRenderOrder();
     opsByOwner = new Map();
     layers = new Map();
     for (const op of allOps) {
@@ -575,20 +679,21 @@ function startRealtimeSync() {
     // back, not new information.
     if (allOps.some((op) => op.id === data.id)) return;
     allOps.push(data);
+    invalidateRenderOrder();
     if (!opsByOwner.has(data.ownerId)) opsByOwner.set(data.ownerId, []);
     opsByOwner.get(data.ownerId).push(data);
     // A remote collaborator's stroke was never painted locally (only our own
     // gestures are painted live, point by point, as they happen), so it
     // needs one real repaint to become visible -- just that one owner's own
-    // layer rebuilt, not every layer (rebuildAllLayers), which is the whole
-    // reason ops are already kept per-owner.
+    // (owner, layer) mask rebuilt, not every layer (rebuildAllLayers), which
+    // is the whole reason ops are already kept per-owner.
     if (data.ownerId !== myOwnerId) {
       // The authoritative stroke has landed -- clear its temporary preview
       // (if any) in this same synchronous turn, immediately before painting
       // the real thing, so there is no frame in between where neither is
       // visible.
       clearRemoteStrokePreview(data.ownerId);
-      rebuildLayerFromOps(data.ownerId);
+      rebuildLayerFromOps(data.ownerId, effectiveLayerId(data, isPublicCanvas));
       repaintVisibleCanvas();
     }
     updateUndoRedoButtons();
@@ -654,6 +759,224 @@ let profilePrefs = loadProfilePrefs();
 function saveProfilePrefs() {
   localStorage.setItem(PROFILE_PREFS_KEY, JSON.stringify(profilePrefs));
 }
+
+// --- Layers: personal settings (name, visibility, selected layer) ----------
+// Layer order/ids are fixed (public/layers.js); only these three things are
+// ever personal to this viewer -- never sent to the server, never broadcast,
+// never visible to anyone else. Same "local-only preference" contract as
+// profilePrefs above, with one addition this app has no prior precedent for:
+// isolation per canvas/room, since a Private Room's own layer names/hidden
+// state must never leak into (or be overwritten by) a different room's, or
+// Public's own. See public/layers.js's layerSettingsStorageKey/
+// parseLayerSettings for the key scheme and defaulting rules.
+const LAYER_IDS = layerIdsFor(isPublicCanvas);
+const LAYER_DEFAULT_NAMES = defaultLayerNamesFor(isPublicCanvas);
+const LAYER_SETTINGS_KEY = layerSettingsStorageKey(roomCode);
+
+function loadLayerSettings() {
+  return parseLayerSettings(localStorage.getItem(LAYER_SETTINGS_KEY), LAYER_IDS, LAYER_DEFAULT_NAMES);
+}
+
+let layerSettings = loadLayerSettings();
+
+function saveLayerSettings() {
+  localStorage.setItem(LAYER_SETTINGS_KEY, JSON.stringify(layerSettings));
+}
+
+// Not shown twice for the same held gesture attempt, and resets its own
+// dismiss timer on a repeat trigger rather than stacking a second element --
+// there is exactly one #layer-hidden-notice node, reused for every trigger.
+let layerHiddenNoticeTimer = null;
+const LAYER_HIDDEN_NOTICE_MS = 2500;
+
+function showLayerHiddenNotice() {
+  layerHiddenNoticeEl.textContent = "This layer is hidden. Make it visible to draw.";
+  layerHiddenNoticeEl.hidden = false;
+  clearTimeout(layerHiddenNoticeTimer);
+  layerHiddenNoticeTimer = setTimeout(() => {
+    layerHiddenNoticeEl.hidden = true;
+  }, LAYER_HIDDEN_NOTICE_MS);
+}
+
+// Which layer card (if any) is currently showing its name as an editable
+// input rather than plain text -- at most one at a time, mirroring the
+// "exactly one popover open" assumption the profile/colour popovers already
+// make elsewhere in this file. renamingControlsEl is the input+checkmark
+// wrapper for that one rename in progress -- the exact element the
+// outside-click handler below treats as "inside" (everything else, including
+// the rest of that same card, counts as "outside" and cancels).
+let renamingLayerId = null;
+let renamingControlsEl = null;
+
+function selectLayer(layerId) {
+  if (layerId === layerSettings.selected) return;
+  layerSettings.selected = layerId;
+  saveLayerSettings();
+  renderLayerPanel();
+}
+
+function toggleLayerVisibility(layerId) {
+  if (layerSettings.hidden[layerId]) delete layerSettings.hidden[layerId];
+  else layerSettings.hidden[layerId] = true;
+  saveLayerSettings();
+  renderLayerPanel();
+  // A visibility change can add or remove content from the composited
+  // picture without any op itself changing -- repaint to reflect it
+  // immediately, purely local, no fetch, no effect on allOps/the server.
+  repaintVisibleCanvas();
+  repaintRemoteStrokePreviews();
+}
+
+function beginRenameLayer(layerId) {
+  renamingLayerId = layerId;
+  renderLayerPanel();
+}
+
+function saveRenameLayer(layerId, rawValue) {
+  const trimmed = rawValue.trim();
+  // Empty/whitespace-only is rejected outright -- the previous name is kept,
+  // exactly as if no edit had been attempted.
+  if (trimmed.length > 0) {
+    layerSettings.names[layerId] = trimmed;
+    saveLayerSettings();
+  }
+  renamingLayerId = null;
+  renamingControlsEl = null;
+  renderLayerPanel();
+}
+
+function cancelRenameLayer() {
+  renamingLayerId = null;
+  renamingControlsEl = null;
+  renderLayerPanel();
+}
+
+// Inline SVG eye / eye-with-slash, following the existing icon convention in
+// this app (viewBox 0 0 24 24, currentColor) -- no eye icon exists anywhere
+// else in the codebase to reuse.
+const EYE_OPEN_SVG =
+  '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">' +
+  '<path d="M1.5 12 C4 7 8 4.5 12 4.5 C16 4.5 20 7 22.5 12 C20 17 16 19.5 12 19.5 C8 19.5 4 17 1.5 12 Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />' +
+  '<circle cx="12" cy="12" r="3.2" fill="currentColor" />' +
+  "</svg>";
+const EYE_CLOSED_SVG =
+  '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">' +
+  '<path d="M1.5 12 C4 7 8 4.5 12 4.5 C16 4.5 20 7 22.5 12 C20 17 16 19.5 12 19.5 C8 19.5 4 17 1.5 12 Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />' +
+  '<circle cx="12" cy="12" r="3.2" fill="currentColor" />' +
+  '<line x1="3" y1="21" x2="21" y2="3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />' +
+  "</svg>";
+
+// Rebuilds #layer-list's children from scratch -- cheap (2 or 4 cards, never
+// a hot path), called once at boot and on every layerSettings/renamingLayerId
+// change. Rendered in descending display order (highest layer first, per the
+// LAYERS panel's visual spec) -- purely cosmetic ordering, independent of the
+// bottom-to-top compositing order computed elsewhere from LAYER_IDS directly.
+function renderLayerPanel() {
+  layerListEl.replaceChildren();
+  for (const layerId of [...LAYER_IDS].reverse()) {
+    const card = document.createElement("div");
+    card.className = "layer-card";
+    if (layerId === layerSettings.selected) card.classList.add("selected");
+
+    const eyeButton = document.createElement("button");
+    eyeButton.type = "button";
+    eyeButton.className = "layer-eye";
+    const hidden = Boolean(layerSettings.hidden[layerId]);
+    eyeButton.innerHTML = hidden ? EYE_CLOSED_SVG : EYE_OPEN_SVG;
+    eyeButton.setAttribute("aria-label", hidden ? `Show ${layerSettings.names[layerId]}` : `Hide ${layerSettings.names[layerId]}`);
+    eyeButton.setAttribute("aria-pressed", String(!hidden));
+    eyeButton.addEventListener("click", (event) => {
+      event.stopPropagation(); // never also triggers the card's own select-on-click handler
+      toggleLayerVisibility(layerId);
+    });
+    card.appendChild(eyeButton);
+
+    if (renamingLayerId === layerId) {
+      // Wraps just the input + checkmark -- the one element the outside-click
+      // handler below treats as "inside" the active edit. Everything else,
+      // including the rest of this same card (the eye icon, clicking the
+      // card background), counts as "outside" and cancels rather than saves.
+      const controls = document.createElement("div");
+      controls.className = "layer-rename-controls";
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "layer-name-input";
+      input.value = layerSettings.names[layerId];
+      input.setAttribute("aria-label", "Layer name");
+      input.addEventListener("click", (event) => event.stopPropagation());
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          saveRenameLayer(layerId, input.value);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          cancelRenameLayer();
+        }
+      });
+      controls.appendChild(input);
+
+      const confirmButton = document.createElement("button");
+      confirmButton.type = "button";
+      confirmButton.className = "layer-rename-confirm";
+      confirmButton.setAttribute("aria-label", "Confirm layer name");
+      confirmButton.textContent = "✓";
+      confirmButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        saveRenameLayer(layerId, input.value);
+      });
+      controls.appendChild(confirmButton);
+
+      controls.addEventListener("click", (event) => event.stopPropagation());
+      card.appendChild(controls);
+      renamingControlsEl = controls;
+
+      // Auto-focus and select the existing name the instant this card
+      // enters edit mode -- queued as a microtask so the input is already
+      // attached to the document (replaceChildren above) before focus()/
+      // select() are called on it.
+      queueMicrotask(() => {
+        input.focus();
+        input.select();
+      });
+    } else {
+      const nameEl = document.createElement("span");
+      nameEl.className = "layer-name";
+      nameEl.textContent = layerSettings.names[layerId];
+      card.appendChild(nameEl);
+    }
+
+    // Single click anywhere on the card selects. Double-click renames only when it lands on the card's
+    // front/left half (by the card's own width, not the text's); the back half only selects.
+    card.addEventListener("click", () => selectLayer(layerId));
+    card.addEventListener("dblclick", (event) => {
+      if (renamingLayerId === layerId) return; // already editing; the input handles its own double-clicks
+      if (event.target instanceof Element && event.target.closest(".layer-eye")) return;
+      selectLayer(layerId);
+      const rect = card.getBoundingClientRect();
+      if (event.clientX < rect.left + rect.width / 2) beginRenameLayer(layerId);
+    });
+    layerListEl.appendChild(card);
+  }
+}
+
+// Outside-click cancels an in-progress rename (never saves) -- the same
+// document-level pointerdown + .contains() guard profilePopover/colourPopover
+// already use elsewhere in this file, scoped to just the input+checkmark
+// wrapper (renamingControlsEl), not the whole card or layer list -- clicking
+// the eye icon, a different layer's card, or even this same card's own
+// background outside the controls must cancel, never save. The confirm
+// button's own click handler is inside that wrapper and calls
+// stopPropagation, so a pointerdown there never reaches this listener at
+// all, and can never race this cancel path.
+document.addEventListener("pointerdown", (event) => {
+  if (renamingLayerId === null || !renamingControlsEl) return;
+  if (renamingControlsEl.contains(event.target)) return;
+  cancelRenameLayer();
+});
+window.addEventListener("keydown", (event) => {
+  if (renamingLayerId !== null && event.key === "Escape") cancelRenameLayer();
+});
 
 async function saveProfile(nickname, cursorColor) {
   const res = await fetch("/api/me/profile", {
@@ -797,6 +1120,7 @@ async function sendStrokePreview(force) {
         color: current.color,
         size: current.size,
         points: current.points,
+        layerId: current.layerId,
         ...(current.shape ? { shape: current.shape } : {}),
       }),
     });
@@ -937,6 +1261,8 @@ function repaintRemoteStrokePreviews() {
   remoteStrokePreviewCtx.clearRect(0, 0, remoteStrokePreviewCanvas.width, remoteStrokePreviewCanvas.height);
   for (const preview of remoteStrokePreviews.values()) {
     if (preview.kind === "erase") continue; // rendered directly into the visible canvas instead -- see erasePreviewLayerFor
+    if (remotePreviewUsesVisibleCanvas(preview)) continue; // lower-layer preview: composited in layer order by repaintVisibleCanvas
+    if (layerSettings.hidden[preview.layerId]) continue; // this viewer has locally hidden the layer this in-progress stroke belongs to
     renderPathOnLayer(remoteStrokePreviewCtx, "draw", preview.color, preview.size, preview.points, preview.shape);
   }
 }
@@ -956,8 +1282,8 @@ function repaintRemoteStrokePreviews() {
 // is otherwise completely untouched by any of this, however many times it
 // recomputes or however this gesture ends.
 function updateErasePreviewLayer(ownerId, preview) {
-  const realLayer = layers.get(ownerId);
-  if (!realLayer) return; // nothing persisted for this owner yet to preview erasing from
+  const realLayer = layers.get(ownerLayerKey(ownerId, preview.layerId));
+  if (!realLayer) return; // nothing persisted for this owner on this layer yet to preview erasing from
   if (!preview.snapshotCanvas) {
     preview.snapshotCanvas = document.createElement("canvas");
     preview.snapshotCanvas.width = canvas.width;
@@ -980,7 +1306,9 @@ function clearRemoteStrokePreview(ownerId) {
   if (!preview) return;
   if (preview.endTimer !== null) clearTimeout(preview.endTimer);
   remoteStrokePreviews.delete(ownerId);
-  if (preview.kind === "erase" && preview.points) {
+  if (preview.kind !== "erase" && preview.points && remotePreviewUsesVisibleCanvas(preview)) {
+    repaintVisibleCanvas(unionRegions(preview.lastRegion, deltaRegionPixels(preview.points, preview.size)));
+  } else if (preview.kind === "erase" && preview.points) {
     // Restores this owner's real, committed layer over exactly the region
     // this preview's erase might have affected. On the "the real op landed"
     // path this is redundant with (but harmless before) the fuller repaint
@@ -1018,6 +1346,10 @@ function handleRemoteStrokeEvent(data) {
   preview.size = data.size;
   preview.points = data.points;
   preview.shape = data.shape;
+  // Defaulted the same way a real op's missing/stale layerId is (bottom
+  // layer) -- a preview from an older client with no layerId at all still
+  // gets a sensible, deterministic layer to preview erasing from.
+  preview.layerId = effectiveLayerId({ layerId: data.layerId }, isPublicCanvas);
   preview.lastSeen = Date.now();
   if (data.kind === "erase") {
     updateErasePreviewLayer(data.ownerId, preview);
@@ -1027,9 +1359,22 @@ function handleRemoteStrokeEvent(data) {
     // its own bounding box, so nothing outside it could possibly have
     // changed.
     repaintVisibleCanvas(deltaRegionPixels(preview.points, preview.size));
+  } else if (remotePreviewUsesVisibleCanvas(preview)) {
+    // Lower layer: composite in layer order. The union with last frame's region also clears a shrinking shape.
+    const region = deltaRegionPixels(preview.points, preview.size);
+    repaintVisibleCanvas(unionRegions(preview.lastRegion, region));
+    preview.lastRegion = region;
+    repaintRemoteStrokePreviews();
   } else {
     repaintRemoteStrokePreviews();
   }
+}
+
+function unionRegions(a, b) {
+  if (!a) return b;
+  const x0 = Math.min(a.x, b.x);
+  const y0 = Math.min(a.y, b.y);
+  return { x: x0, y: y0, width: Math.max(a.x + a.width, b.x + b.width) - x0, height: Math.max(a.y + a.height, b.y + b.height) - y0 };
 }
 
 // The drawing client sends stroke-end the instant its own gesture ends,
@@ -1100,14 +1445,18 @@ function cancelFrame() {
 // goes out, so there is nothing left to reconcile when it comes back.
 function renderCurrentDelta() {
   if (!current || myOwnerId === null) return;
-  const layer = ensureLayer(myOwnerId);
+  const layer = ensureLayer(myOwnerId, current.layerId);
   const delta = current.points.slice(currentLastRenderedIndex);
   renderPathOnLayer(layer.ctx, current.kind, current.color, current.size, delta);
   currentLastRenderedIndex = current.points.length - 1;
-  if (current.kind === "draw") {
-    // Newest content is always safe to paint directly on top, unclipped --
-    // nothing drawn after it yet, by anyone, could have occluded it.
+  if (current.kind === "draw" && isTopLayerId(current.layerId)) {
+    // Newest content on the top layer is always safe to paint directly on top, unclipped --
+    // nothing above this layer exists to occlude it.
     renderPathOnLayer(ctx, "draw", current.color, current.size, delta);
+  } else if (current.kind === "draw") {
+    // A lower layer must stay under every higher layer's content: regional layer-ordered repaint,
+    // which paints `current` right after its own layer's committed ops.
+    repaintVisibleCanvas(deltaRegionPixels(delta, current.size));
   } else {
     // An in-progress erase can retroactively shrink any of this owner's
     // already-composited draws, anywhere in the global stacking order --
@@ -1140,13 +1489,43 @@ function deltaRegionPixels(points, sizeNormalized) {
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
 
+// The owner's layer exactly as it was when the current ERASE began (null for any other gesture). Live
+// erasing strokes each frame's few points as a separate path, and every separate round-capped
+// destination-out stroke composites against the partly erased edge left by the one before, so the
+// live mask drifts from the one replay builds by stroking the whole path once (thousands of antialiased
+// edge pixels, alpha up to ~100/255, measured). endGesture restores this snapshot and erases the
+// whole path once, which is bit-identical to replay.
+let eraseLayerSnapshot = null;
+
+function snapshotLayerForErase() {
+  const layer = ensureLayer(myOwnerId, layerSettings.selected);
+  if (!eraseLayerSnapshot || eraseLayerSnapshot.width !== layer.canvas.width || eraseLayerSnapshot.height !== layer.canvas.height) {
+    eraseLayerSnapshot = document.createElement("canvas");
+    eraseLayerSnapshot.width = layer.canvas.width;
+    eraseLayerSnapshot.height = layer.canvas.height;
+  }
+  const sctx = eraseLayerSnapshot.getContext("2d");
+  sctx.clearRect(0, 0, eraseLayerSnapshot.width, eraseLayerSnapshot.height);
+  sctx.drawImage(layer.canvas, 0, 0);
+}
+
 function beginGesture(kind, point) {
   if (myOwnerId === null) return;
+  // Blocked before any state mutation (no current set, no snapshot taken, no
+  // layer/canvas touched) -- a hidden layer's content must never be drawn or
+  // erased while it's hidden, only resume once it's visible again.
+  if (layerSettings.hidden[layerSettings.selected]) {
+    showLayerHiddenNotice();
+    return;
+  }
+  eraseLayerSnapshot && kind !== "erase" && (eraseLayerSnapshot = null);
+  if (kind === "erase") snapshotLayerForErase();
   current = {
     kind,
     color: kind === "erase" ? null : color,
     size: (kind === "erase" ? eraserSizePx : brushSizePx) / canvas.width,
     points: [point],
+    layerId: layerSettings.selected,
   };
   currentLastRenderedIndex = 0;
   renderCurrentDelta();
@@ -1185,12 +1564,20 @@ function shapeEnd(type, anchorNorm, pointerNorm, shift) {
 
 function beginShapeGesture(type, point) {
   if (myOwnerId === null) return;
+  // Same hidden-active-layer guard as beginGesture: blocked before any state
+  // mutation, so no pointer capture side effect reaches an actual shape being
+  // created or persisted while its layer is hidden.
+  if (layerSettings.hidden[layerSettings.selected]) {
+    showLayerHiddenNotice();
+    return;
+  }
   current = {
     kind: "draw",
     color,
     size: brushSizePx / canvas.width,
     points: [point, point],
     shape: type === "line" ? { type } : { type, mode: shapeMode },
+    layerId: layerSettings.selected,
   };
   shapeRawPointer = point;
   currentLastRenderedIndex = 0;
@@ -1205,10 +1592,49 @@ function updateShapeGesture() {
   sendStrokePreview(false);
 }
 
+// Pixel region the lower-layer shape preview last occupied on the visible canvas (null when none).
+let shapePreviewRegion = null;
+
 function paintShapePreview() {
   repaintRemoteStrokePreviews();
   if (!current || !current.shape) return;
-  renderPathOnLayer(remoteStrokePreviewCtx, "draw", current.color, current.size, current.points, current.shape);
+  if (isTopLayerId(current.layerId)) {
+    renderPathOnLayer(remoteStrokePreviewCtx, "draw", current.color, current.size, current.points, current.shape);
+    return;
+  }
+  // Lower layer: the overlay would sit above higher layers, so composite the preview in layer order instead,
+  // repainting only the union of where it was and where it is now (also clears a shrinking shape).
+  const region = deltaRegionPixels(current.points, current.size);
+  repaintVisibleCanvas(unionRegions(shapePreviewRegion, region));
+  shapePreviewRegion = region;
+}
+
+// Removes a lower-layer shape preview from the visible canvas once `current` no longer holds it.
+function clearShapePreviewRegion() {
+  const region = shapePreviewRegion;
+  shapePreviewRegion = null;
+  if (region) repaintVisibleCanvas(region);
+}
+
+// The pointer that started the active freehand/erase gesture (see lostpointercapture).
+let gesturePointerId = null;
+
+// Drops a Brush/Eraser gesture whose pointer capture was lost without a pointerup: nothing is saved or
+// broadcast as an op. The stroke was painted live into the owner's layer and onto the visible canvas, so
+// rebuild both from the committed (and still-pending) ops, which removes it; a stroke that was never
+// persisted is not in them.
+function cancelFreehandGesture() {
+  if (!current || current.shape) return;
+  const cancelledLayerId = current.layerId;
+  cancelFrame();
+  current = null;
+  gesturePointerId = null;
+  // rebuildAllLayers only rebuilds owners that have committed ops; if this guest has none yet, clear
+  // their layer explicitly so the abandoned stroke does not linger in it.
+  if (myOwnerId !== null && !opsByOwner.has(myOwnerId)) rebuildLayerFromOps(myOwnerId, cancelledLayerId);
+  rebuildAllLayers();
+  endStrokePreview();
+  updateUndoRedoButtons();
 }
 
 // Drops an unfinished shape without saving, broadcasting an op, or leaving any
@@ -1218,6 +1644,7 @@ function cancelShapeGesture() {
   cancelFrame();
   current = null;
   shapeRawPointer = null;
+  clearShapePreviewRegion();
   repaintRemoteStrokePreviews();
   endStrokePreview();
   updateUndoRedoButtons();
@@ -1227,11 +1654,12 @@ async function persistGesture(finished) {
   const endpoint = finished.kind === "erase" ? eraseUrl : drawUrl;
   const body =
     finished.kind === "erase"
-      ? { radius: finished.size / 2, points: finished.points }
+      ? { radius: finished.size / 2, points: finished.points, layerId: finished.layerId }
       : {
           color: finished.color,
           width: finished.size,
           points: finished.points,
+          layerId: finished.layerId,
           ...(finished.shape ? { shape: finished.shape } : {}),
         };
 
@@ -1252,14 +1680,19 @@ async function persistGesture(finished) {
       size: finished.size,
       points: finished.points,
       createdAt: saved.createdAt,
+      layerId: finished.layerId,
       ...(finished.shape ? { shape: finished.shape } : {}),
     };
     // Appended at the end: with no live multi-user sync yet, nothing else
     // locally inserts an op into allOps mid-session, so this is always the
     // new highest-seq entry for this client's own view.
-    allOps.push(op);
-    if (!opsByOwner.has(myOwnerId)) opsByOwner.set(myOwnerId, []);
-    opsByOwner.get(myOwnerId).push(op);
+    // The SSE "op" echo can land before this response; never record the same op twice.
+    if (!allOps.some((existing) => existing.id === op.id)) {
+      allOps.push(op);
+      invalidateRenderOrder();
+      if (!opsByOwner.has(myOwnerId)) opsByOwner.set(myOwnerId, []);
+      opsByOwner.get(myOwnerId).push(op);
+    }
     // Already painted onto my own layer live, point by point, as the
     // gesture happened -- this only keeps the replay history in sync for a
     // future resize/reload. No re-render here: the server never recomputes
@@ -1284,6 +1717,57 @@ async function persistGesture(finished) {
   }
 }
 
+// At the end of an erase: make the owner's layer mask exactly what replay will build (restore the pre-erase
+// snapshot, erase the whole path once), then repaint the visible canvas -- but only the rows where the mask
+// really changed, found by diffing the alpha channel of the live mask against the reconciled one. That region
+// is a thin band along the stroke's antialiased edges, so this stays cheap however many ops exist; the old
+// full-history repaint cost one 1920x1080 composite per op in a single blocking task (~1 s at 120 ops).
+function reconcileEraseMask() {
+  if (!eraseLayerSnapshot || myOwnerId === null) return;
+  const layer = ensureLayer(myOwnerId, current.layerId);
+  const w = layer.canvas.width;
+  const h = layer.canvas.height;
+  const region = deltaRegionPixels(current.points, current.size);
+  const x0 = Math.max(0, Math.floor(region.x));
+  const y0 = Math.max(0, Math.floor(region.y));
+  const x1 = Math.min(w, Math.ceil(region.x + region.width));
+  const y1 = Math.min(h, Math.ceil(region.y + region.height));
+  if (x1 <= x0 || y1 <= y0) return;
+  const rw = x1 - x0;
+  const rh = y1 - y0;
+  const before = layer.ctx.getImageData(x0, y0, rw, rh).data;
+  layer.ctx.clearRect(x0, y0, rw, rh);
+  layer.ctx.drawImage(eraseLayerSnapshot, x0, y0, rw, rh, x0, y0, rw, rh);
+  // the whole path once, clipped to the box (nothing outside it can have been touched by this erase)
+  layer.ctx.save();
+  layer.ctx.beginPath();
+  layer.ctx.rect(x0, y0, rw, rh);
+  layer.ctx.clip();
+  renderPathOnLayer(layer.ctx, "erase", null, current.size, current.points);
+  layer.ctx.restore();
+  const after = layer.ctx.getImageData(x0, y0, rw, rh).data;
+  // Mark the TILES that contain a changed mask pixel. The changed pixels lie along a thin curve (the stroke's
+  // antialiased edges), so a bounding box of them can be nearly the whole canvas; repainting tile by tile makes
+  // the cost follow the edge length instead.
+  const TILE = 64;
+  const tilesX = Math.ceil(rw / TILE);
+  const dirty = new Set();
+  for (let i = 3, p = 0; i < after.length; i += 4, p++) {
+    if (after[i] !== before[i]) {
+      const px = p % rw;
+      const py = (p - px) / rw;
+      dirty.add(Math.floor(py / TILE) * tilesX + Math.floor(px / TILE));
+    }
+  }
+  eraseLayerSnapshot = null;
+  for (const key of dirty) {
+    const tx = (key % tilesX) * TILE;
+    const ty = Math.floor(key / tilesX) * TILE;
+    // one pixel of margin so the repaint covers the antialiased fringe on the tile border
+    repaintVisibleCanvas({ x: x0 + tx - 1, y: y0 + ty - 1, width: Math.min(TILE, rw - tx) + 2, height: Math.min(TILE, rh - ty) + 2 });
+  }
+}
+
 function endGesture() {
   if (!current) return;
   if (current.shape) {
@@ -1294,15 +1778,23 @@ function endGesture() {
     }
     // Commit: paint onto the owner's own layer (so erasing and replay agree)
     // and the visible canvas, then hand off to the normal persist path.
-    const layer = ensureLayer(myOwnerId);
+    const layer = ensureLayer(myOwnerId, current.layerId);
     renderPathOnLayer(layer.ctx, "draw", current.color, current.size, current.points, current.shape);
-    renderPathOnLayer(ctx, "draw", current.color, current.size, current.points, current.shape);
     const finishedShape = current;
     current = null;
     shapeRawPointer = null;
+    if (isTopLayerId(finishedShape.layerId)) {
+      renderPathOnLayer(ctx, "draw", finishedShape.color, finishedShape.size, finishedShape.points, finishedShape.shape);
+    }
     repaintRemoteStrokePreviews();
     endStrokePreview();
     pendingOps.push(finishedShape);
+    if (!isTopLayerId(finishedShape.layerId)) {
+      // The final shape (now in pendingOps) replaces the preview; repaint over both footprints.
+      const previewRegion = shapePreviewRegion;
+      shapePreviewRegion = null;
+      repaintVisibleCanvas(unionRegions(previewRegion, opPixelBounds(finishedShape)));
+    }
     updateUndoRedoButtons();
     persistGesture(finishedShape);
     return;
@@ -1314,11 +1806,7 @@ function endGesture() {
   // preview shows the exact final shape right before it gets reconciled away
   // by the real "op" broadcast persistGesture's save triggers below.
   sendStrokePreview(true);
-  // The per-frame erase preview only ever repaints the delta's own region
-  // (see renderCurrentDelta); reconcile with one full, authoritative repaint
-  // at gesture end so nothing has drifted. This runs once per gesture, not
-  // once per frame, so it doesn't reintroduce the per-frame cost just fixed.
-  if (current.kind === "erase") repaintVisibleCanvas();
+  if (current.kind === "erase") reconcileEraseMask();
   const finished = current;
   current = null;
   // Tells every other viewer this stroke is no longer in progress, whether or
@@ -1453,6 +1941,7 @@ canvas.addEventListener("pointerdown", (event) => {
     beginShapeGesture(mode, pointerPos(event));
     return;
   }
+  gesturePointerId = event.pointerId;
   beginGesture(mode === "eraser" ? "erase" : "draw", pointerPos(event));
 });
 
@@ -1498,8 +1987,15 @@ canvas.addEventListener("pointercancel", (event) => {
   }
   endPointerAction(event);
 });
-canvas.addEventListener("lostpointercapture", () => {
-  if (current && current.shape) cancelShapeGesture();
+canvas.addEventListener("lostpointercapture", (event) => {
+  if (current && current.shape) {
+    cancelShapeGesture();
+    return;
+  }
+  // A normal stroke ends with pointerup, which runs first and clears `current`, so reaching this point with
+  // a live freehand/erase gesture means capture was lost without a pointerup. Only the pointer that started
+  // the gesture counts (another finger lifting must not cancel it).
+  if (current && event.pointerId === gesturePointerId) cancelFreehandGesture();
 });
 
 // Shift pressed or released mid-drag updates the preview immediately, without
@@ -1952,6 +2448,11 @@ wireHelpPopover();
 // again -- a later window resize must never re-trigger Fit (see the removed
 // resize listener above).
 requestAnimationFrame(applyFit);
+// The LAYERS panel is purely local state (public/layers.js) -- it needs no
+// ownership or server round-trip, so it renders immediately rather than
+// waiting on loadMe() below.
+renderLayerPanel();
+
 // ownership must be known before a layer can be attributed to "my own";
 // startRealtimeSync's own `sync` handler is what actually populates allOps
 // and renders for the first time -- see the SSE section above for why there

@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getOrSetAnonId, readAnonId } from "./anon.js";
 import { isValidShapeDescriptor } from "../public/shapes.js";
+import { layerIdsFor } from "../public/layers.js";
 import {
   abandonRedoBranch,
   countOnlineNow,
@@ -183,6 +184,23 @@ function pointsValid(points) {
   return Array.isArray(points) && points.length > 0 && points.every(isPoint);
 }
 
+// A draw/erase op's optional layerId, validated against the fixed id list
+// for whatever scope it's being posted into (roomId === null -> Public's 2
+// layers; a room -> the 4 Private layers -- see public/layers.js). Absent
+// entirely (undefined) is valid and means "no layer system support on this
+// client" -- stored as null, exactly like every op that predates this
+// feature, and rendered on the bottom-most layer client-side (see
+// effectiveLayerId). Present-but-not-one-of-this-scope's-own-ids is rejected
+// outright, the same "we don't silently coerce a bad value" precedent
+// normalizeShape already sets for `shape`.
+function normalizeLayerId(layerId, roomId) {
+  if (layerId === undefined) return { ok: true, value: null };
+  if (typeof layerId !== "string" || !layerIdsFor(roomId === null).includes(layerId)) {
+    return { ok: false };
+  }
+  return { ok: true, value: layerId };
+}
+
 // A shape op (Line/Rectangle/Ellipse) is a draw op with a `shape`
 // descriptor and exactly its two defining corners (anchor, then the final,
 // already-constrained opposite corner), as finite normalized coordinates in a
@@ -206,7 +224,7 @@ function normalizeShape(shape, points) {
 // route (never the request body either), never from anything a client could
 // supply directly.
 function handleDraw(req, res, roomId) {
-  const { color, width, points, shape } = req.body ?? {};
+  const { color, width, points, shape, layerId } = req.body ?? {};
   const widthValid = typeof width === "number" && Number.isFinite(width) && width > 0;
 
   if (typeof color !== "string" || !widthValid || !pointsValid(points)) {
@@ -225,6 +243,11 @@ function handleDraw(req, res, roomId) {
       return;
     }
   }
+  const normalizedLayer = normalizeLayerId(layerId, roomId);
+  if (!normalizedLayer.ok) {
+    res.status(400).json({ error: "layerId, when present, must be one of this canvas's own layer ids" });
+    return;
+  }
 
   const op = {
     id: randomUUID(),
@@ -236,6 +259,7 @@ function handleDraw(req, res, roomId) {
     createdAt: Date.now(),
     roomId,
     docKind: "freehand",
+    layerId: normalizedLayer.value,
     ...(normalizedShape ? { shape: normalizedShape } : {}),
   };
   const seq = insertOp(op);
@@ -265,11 +289,16 @@ function handleDraw(req, res, roomId) {
 // touch another owner's pixels. Shared by the Public Canvas and every room,
 // the same way handleDraw is.
 function handleErase(req, res, roomId) {
-  const { radius, points } = req.body ?? {};
+  const { radius, points, layerId } = req.body ?? {};
   const radiusValid = typeof radius === "number" && Number.isFinite(radius) && radius > 0;
 
   if (!radiusValid || !pointsValid(points)) {
     res.status(400).json({ error: "an erase op needs a positive radius and at least one {x, y} point" });
+    return;
+  }
+  const normalizedLayer = normalizeLayerId(layerId, roomId);
+  if (!normalizedLayer.ok) {
+    res.status(400).json({ error: "layerId, when present, must be one of this canvas's own layer ids" });
     return;
   }
 
@@ -283,6 +312,7 @@ function handleErase(req, res, roomId) {
     createdAt: Date.now(),
     roomId,
     docKind: "freehand",
+    layerId: normalizedLayer.value,
   };
   const seq = insertOp(op);
   // See the matching comment in handleDraw: a fresh edit abandons this
@@ -699,7 +729,7 @@ function handleFreehandStrokePreview(req, res, roomId) {
     return;
   }
 
-  const { kind, color, size, points, shape } = req.body ?? {};
+  const { kind, color, size, points, shape, layerId } = req.body ?? {};
   if (kind !== "draw" && kind !== "erase") {
     res.status(400).json({ error: "kind must be 'draw' or 'erase'" });
     return;
@@ -721,6 +751,13 @@ function handleFreehandStrokePreview(req, res, roomId) {
     res.status(400).json({ error: "a stroke preview needs a positive size and at least one {x, y} point" });
     return;
   }
+  // Never persisted (see below), so this is relayed as-is rather than
+  // rejecting the whole preview over it -- a remote viewer's own layer
+  // visibility filter (public/app.js) just treats an unrecognized/absent
+  // value as "no layer info", the same backward-compatible default a real op
+  // gets from effectiveLayerId.
+  const normalizedLayer = normalizeLayerId(layerId, roomId);
+  const previewLayerId = normalizedLayer.ok ? normalizedLayer.value : null;
 
   // Never persisted, so never ownership-checked against existing artwork the
   // way a real draw/erase op is -- that safety doesn't come from validation
@@ -734,6 +771,7 @@ function handleFreehandStrokePreview(req, res, roomId) {
     color: kind === "erase" ? null : color,
     size,
     points,
+    layerId: previewLayerId,
     ...(previewShape ? { shape: previewShape } : {}),
   });
   res.status(200).json({ ok: true });

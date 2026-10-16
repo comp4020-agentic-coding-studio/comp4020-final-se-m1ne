@@ -1422,10 +1422,18 @@ body {
   color: var(--shell-text);
 }
 
-/* Right colour column ------------------------------------------------------ */
-#colour-group {
+/* Right sidebar: COLOURS above LAYERS, same fixed width either used to sit
+   on #colour-group itself -- moved up to the shared wrapper so adding a
+   second panel below it doesn't touch #colour-group's own box at all. */
+#right-sidebar {
   flex: 0 0 264px;
   width: 264px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#colour-group {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1433,6 +1441,135 @@ body {
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
   border-radius: var(--shell-radius-panel);
+}
+
+/* LAYERS panel: same panel chrome as #colour-group (warm cream background,
+   soft brown border, rounded corners), directly below it in #right-sidebar. */
+#layers-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--shell-radius-panel);
+}
+
+#layer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* One layer, top-to-bottom in display order (highest layer first) --
+   compositing order itself is computed in public/app.js from the fixed
+   bottom-to-top id lists in public/layers.js, entirely independent of how
+   the cards are laid out here. Mirrors .tool-button's own two-tone
+   unselected/selected pattern (background swap + accent border), so the
+   active layer automatically reads correctly in both the Public (green) and
+   Private (lavender) accent via the existing --workspace-accent/
+   --selected-tool-bg tokens -- no new colour values needed. */
+.layer-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--shell-radius-button);
+  background: var(--button-bg);
+  cursor: pointer;
+}
+
+.layer-card.selected {
+  background: var(--selected-tool-bg);
+  border-color: var(--workspace-accent);
+}
+
+.layer-card .layer-eye {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--shell-radius-button);
+  background: transparent;
+  color: var(--shell-text);
+  cursor: pointer;
+}
+
+.layer-card .layer-eye:hover {
+  background: var(--panel-border);
+}
+
+.layer-card .layer-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  color: var(--shell-text);
+  cursor: text;
+}
+
+/* Wraps just the input + checkmark while a layer is being renamed -- the one
+   element the outside-click-cancel handler (public/app.js) treats as
+   "inside" the active edit. */
+.layer-card .layer-rename-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.layer-card .layer-name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 2px 4px;
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  background: var(--panel-bg);
+  color: var(--shell-text);
+}
+
+.layer-card .layer-rename-confirm {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--shell-radius-button);
+  background: var(--button-bg);
+  color: var(--shell-text);
+  cursor: pointer;
+}
+
+/* Non-blocking "layer is hidden" hint: an aria-live region, same
+   announce-without-stealing-focus idiom as #zoom-percent, auto-dismissed by
+   public/app.js's own timer rather than requiring dismissal. */
+#layer-hidden-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 25;
+  padding: 8px 16px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--shell-radius-button);
+  color: var(--shell-text);
+  font-size: 0.82rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
 }
 
 .group-label {
@@ -1530,7 +1667,7 @@ body {
   }
 
   #tool-ribbon,
-  #colour-group {
+  #right-sidebar {
     flex: 0 0 auto;
     width: auto;
   }

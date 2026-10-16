@@ -50,11 +50,15 @@ function rule(selector: string): string {
 }
 
 describe("shared three-column editor layout (styles.css source)", () => {
-  it("left tool column is 76px, right colour column is 264px, with 12px gaps and 14px panel radius", () => {
+  it("left tool column is 76px, right sidebar is 264px, with 12px gaps and 14px panel radius", () => {
     expect(rule("#tool-ribbon")).toMatch(/flex:\s*0 0 76px/);
     expect(rule("#tool-ribbon")).toMatch(/width:\s*76px/);
-    expect(rule("#colour-group")).toMatch(/flex:\s*0 0 264px/);
-    expect(rule("#colour-group")).toMatch(/width:\s*264px/);
+    // The 264px fixed-width sizing now lives on #right-sidebar, the flex
+    // column wrapping #colour-group and #layers-group (LAYERS panel,
+    // directly below COLOURS) -- #colour-group itself is no longer the
+    // direct flex child of #editor-body that owns this sizing.
+    expect(rule("#right-sidebar")).toMatch(/flex:\s*0 0 264px/);
+    expect(rule("#right-sidebar")).toMatch(/width:\s*264px/);
     expect(rule("#editor-body")).toMatch(/gap:\s*12px/);
     expect(rule("#tool-ribbon")).toMatch(/border-radius:\s*var\(--shell-radius-panel\)/);
     expect(css).toMatch(/--shell-radius-panel:\s*14px/);
