@@ -2,7 +2,7 @@
 // and that a very large fill is iterative and bounded (no recursion, one byte per pixel + a small stack).
 
 import { describe, expect, it } from "vitest";
-import { floodFillRuns, fillRunsBounds, isValidFillRuns, MAX_FILL_RUNS } from "../public/floodfill.js";
+import { dilateRuns, fillRingRuns, floodFillRuns, fillRunsBounds, isValidFillRuns, FILL_EXPANSION_PX, MAX_FILL_RUNS } from "../public/floodfill.js";
 
 const W = 20;
 const H = 12;
@@ -102,5 +102,83 @@ describe("isValidFillRuns", () => {
     expect(isValidFillRuns([0, 0, 0], 10, 10)).toBe(false); // empty span
     expect(isValidFillRuns([0.5, 0, 1], 10, 10)).toBe(false);
     expect(isValidFillRuns(Array(3 * (MAX_FILL_RUNS + 1)).fill(0), 10, 10)).toBe(false);
+  });
+});
+
+// Brute-force reference: every pixel within one step (8 neighbours) of the region, not in the region, clipped.
+function bruteRing(runs: number[], w: number, h: number) {
+  const region = filledSet(runs);
+  const ring = new Set<string>();
+  for (const key of region) {
+    const [x, y] = key.split(",").map(Number);
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        if (!region.has(`${nx},${ny}`)) ring.add(`${nx},${ny}`);
+      }
+  }
+  return ring;
+}
+
+describe("one-pixel expansion (dilateRuns)", () => {
+  it("is fixed at exactly one pixel", () => {
+    expect(FILL_EXPANSION_PX).toBe(1);
+  });
+
+  it("a single pixel grows to its 8 neighbours: horizontal, vertical AND diagonal", () => {
+    const ring = filledSet(dilateRuns([5, 5, 1], 12, 12));
+    expect(ring.size).toBe(8);
+    for (const [x, y] of [[4, 4], [5, 4], [6, 4], [4, 5], [6, 5], [4, 6], [5, 6], [6, 6]]) expect(ring.has(`${x},${y}`), `${x},${y}`).toBe(true);
+    expect(ring.has("5,5")).toBe(false); // the region itself is not part of the ring
+    expect(ring.has("3,5")).toBe(false); // exactly 1px, not 2
+  });
+
+  it("the ring never overlaps the region and the union is exactly the 1px dilation", () => {
+    const runs = [3, 2, 4, 4, 2, 4, 5, 3, 2]; // an irregular blob
+    const ring = filledSet(dilateRuns(runs, 12, 12));
+    const region = filledSet(runs);
+    for (const k of ring) expect(region.has(k)).toBe(false);
+    expect(ring).toEqual(bruteRing(runs, 12, 12));
+  });
+
+  it("matches the brute-force dilation on a real flood-fill result (wall with a concave notch)", () => {
+    const data = blank();
+    for (let x = 4; x <= 14; x++) { setPx(data, W, x, 2); setPx(data, W, x, 9); }
+    for (let y = 2; y <= 9; y++) { setPx(data, W, 4, y); setPx(data, W, 14, y); }
+    for (let y = 5; y <= 7; y++) setPx(data, W, 9, y); // notch
+    const runs = floodFillRuns(data, W, H, 6, 4)!;
+    expect(filledSet(dilateRuns(runs, W, H))).toEqual(bruteRing(runs, W, H));
+  });
+
+  it("is clipped to the canvas: a fill touching the corner or edges never produces out-of-bounds pixels", () => {
+    const ring = dilateRuns([0, 0, 3], 10, 10); // top-left corner
+    for (let i = 0; i < ring.length; i += 3) {
+      expect(ring[i]).toBeGreaterThanOrEqual(0);
+      expect(ring[i + 1]).toBeGreaterThanOrEqual(0);
+      expect(ring[i + 1] + ring[i + 2]).toBeLessThanOrEqual(10);
+      expect(ring[i]).toBeLessThan(10);
+    }
+    expect(filledSet(ring)).toEqual(bruteRing([0, 0, 3], 10, 10));
+    // a whole-document fill has nothing left to expand into
+    const all: number[] = [];
+    for (let y = 0; y < 6; y++) all.push(y, 0, 8);
+    expect(dilateRuns(all, 8, 6)).toEqual([]);
+    // right/bottom edges
+    expect(filledSet(dilateRuns([9, 7, 3], 10, 10))).toEqual(bruteRing([9, 7, 3], 10, 10));
+  });
+
+  it("a filled region of the full 1920x1080 document stays bounded and in-document", () => {
+    const runs = floodFillRuns(new Uint8ClampedArray(1920 * 1080 * 4), 1920, 1080, 10, 10)!;
+    expect(dilateRuns(runs, 1920, 1080)).toEqual([]);
+    const some = [100, 100, 50, 101, 100, 50];
+    const ring = dilateRuns(some, 1920, 1080);
+    expect(ring.length / 3).toBeLessThan(20);
+  });
+
+  it("is derived, not stored: the same runs array always yields the identical cached ring", () => {
+    const runs = [5, 5, 3, 6, 5, 3];
+    expect(fillRingRuns(runs, 20, 20)).toBe(fillRingRuns(runs, 20, 20));
+    expect(dilateRuns(runs, 20, 20)).toEqual(dilateRuns([...runs], 20, 20)); // deterministic across copies (replay/refresh)
   });
 });

@@ -5,7 +5,7 @@ import { compositeOverWhite } from "./sampling.js";
 import { wireHelpPopover } from "./help-popover.js";
 import { initCursorColourPicker } from "./cursor-colour-picker.js";
 import { constrainCorner, isMeaningfulShape, paintShape } from "./shapes.js";
-import { floodFillRuns, paintFill, fillRunsBounds } from "./floodfill.js";
+import { floodFillRuns, paintFill, paintFillRing, fillRunsBounds } from "./floodfill.js";
 import { installNavigationMarking, isNavigating, markNavigating, releasePreviousLease } from "./presence-handoff.js";
 import {
   DOCUMENT_WIDTH,
@@ -353,10 +353,13 @@ function ensureScratch() {
 // Shared by full replay (every historical op) and the live in-progress
 // gesture (just its newest delta), so there is exactly one rendering code
 // path for both draw and erase, in every situation.
-function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points, shape) {
+// `part` only matters for a Paint Bucket op: "core" = the spans the flood found, "ring" = the fixed 1px
+// expansion around them, undefined = both (the full coverage an owner layer mask needs). Others ignore it.
+function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points, shape, part) {
   if (shape && shape.type === "fill") {
     // Paint Bucket op: replays the exact pixel spans it filled when it was made (never re-samples anything).
-    paintFill(layerCtx, color, shape.runs);
+    if (part !== "core") paintFillRing(layerCtx, color, shape.runs, DOCUMENT_WIDTH, DOCUMENT_HEIGHT);
+    if (part !== "ring") paintFill(layerCtx, color, shape.runs);
     return;
   }
   if (shape && points.length === 2) {
@@ -449,7 +452,13 @@ function rebuildAllLayers() {
 function opNormalizedBounds(op) {
   if (!op._normBounds && op.shape && op.shape.type === "fill") {
     const b = fillRunsBounds(op.shape.runs) ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
-    op._normBounds = { minX: b.minX / DOCUMENT_WIDTH, minY: b.minY / DOCUMENT_HEIGHT, maxX: b.maxX / DOCUMENT_WIDTH, maxY: b.maxY / DOCUMENT_HEIGHT };
+    // +1px each way: the fill is drawn one pixel wider than the region it found (see floodfill.js dilateRuns).
+    op._normBounds = {
+      minX: Math.max(0, b.minX - 1) / DOCUMENT_WIDTH,
+      minY: Math.max(0, b.minY - 1) / DOCUMENT_HEIGHT,
+      maxX: Math.min(DOCUMENT_WIDTH, b.maxX + 1) / DOCUMENT_WIDTH,
+      maxY: Math.min(DOCUMENT_HEIGHT, b.maxY + 1) / DOCUMENT_HEIGHT,
+    };
   }
   if (!op._normBounds && op.shape && op.points.length === 2) {
     const [p, q] = op.points;
@@ -584,46 +593,54 @@ function repaintVisibleCanvas(region) {
   };
   // Unmasked live content (never clipped by an owner layer mask: nothing erases it until it is committed).
   // Its points keep growing while it is live, so its bounds are computed fresh (opPixelBounds caches).
-  const compositeLive = (item) => {
+  const compositeLive = (item, part) => {
     const bounds = opPixelBounds({ points: item.points, size: item.size, shape: item.shape });
     if (clipRect && !rectsIntersect(bounds, clipRect)) return;
     beginScratch(1);
-    renderPathOnLayer(scratchCtx, "draw", item.color, item.size, item.points, item.shape);
+    renderPathOnLayer(scratchCtx, "draw", item.color, item.size, item.points, item.shape, part);
     scratchCtx.restore();
     blitScratch();
   };
 
   for (const layerId of ids) {
     if (layerSettings.hidden[layerId]) continue; // this viewer has locally hidden this layer -- never touches allOps/the server
-    for (const op of opsByLayer.get(layerId)) {
+    const isFill = (op) => op.shape && op.shape.type === "fill";
+    const compositeCommitted = (op, part) => {
       // Fading is applied here, and only here: to a draw op's own stroke, right before it gets clipped against
       // its owner's layer mask below. The mask (rebuildLayerFromOps) is never faded, so an owner can always
       // erase a faded stroke and nothing erased can reappear by aging back in. A fully faded op is skipped
       // (still persisted, see public/fade.js). effectiveOpacity is 1 on a Private Room, so rooms never fade.
       const opacity = effectiveOpacity(op, now, isPublicCanvas);
-      if (opacity <= 0) continue;
-      if (clipRect && !rectsIntersect(opPixelBounds(op), clipRect)) continue; // this op can't paint inside the dirty region at all
+      if (opacity <= 0) return;
+      if (clipRect && !rectsIntersect(opPixelBounds(op), clipRect)) return; // this op can't paint inside the dirty region at all
       const masked = opNeedsOwnerMask(op, layerId, erases);
       const ownerLayer = masked ? layers.get(ownerLayerKey(op.ownerId, layerId)) : null;
-      if (masked && !ownerLayer) continue;
+      if (masked && !ownerLayer) return;
       beginScratch(opacity);
-      renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points, op.shape);
+      renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points, op.shape, part);
       scratchCtx.restore(); // back to the untransformed, default state for the mask step
       if (masked) {
-      scratchCtx.globalAlpha = 1;
-      scratchCtx.globalCompositeOperation = "destination-in";
-      // While this op's owner has a remote erase in progress, clip against the disposable preview of their
-      // post-erase layer instead of the real one (keyed strictly by this op's own owner + layer, so one
-      // owner's erase can never affect another owner's artwork).
-      const clipSource = erasePreviewLayerFor(op.ownerId, layerId) ?? ownerLayer.canvas;
-      scratchCtx.drawImage(clipSource, rx, ry, rw, rh, 0, 0, rw, rh);
+        scratchCtx.globalAlpha = 1;
+        scratchCtx.globalCompositeOperation = "destination-in";
+        // While this op's owner has a remote erase in progress, clip against the disposable preview of their
+        // post-erase layer instead of the real one (keyed strictly by this op's own owner + layer, so one
+        // owner's erase can never affect another owner's artwork).
+        const clipSource = erasePreviewLayerFor(op.ownerId, layerId) ?? ownerLayer.canvas;
+        scratchCtx.drawImage(clipSource, rx, ry, rw, rh, 0, 0, rw, rh);
       }
       blitScratch();
-    }
+    };
+    const layerPending = myOwnerId !== null ? pendingOps.filter((op) => effectiveLayerId(op, isPublicCanvas) === layerId) : [];
+    const layerOps = opsByLayer.get(layerId);
+    // A Paint Bucket fill is drawn one pixel wider than the region it found. That expansion ring goes FIRST,
+    // beneath everything else on this layer, so it can only show through where an outline is not fully opaque
+    // (the antialiased edge) and never overwrites or thickens an outline; the fill's core is then drawn in
+    // normal seq order. Rings and cores come from the same stored spans, so live, replay and refresh agree.
+    for (const op of layerOps) if (isFill(op)) compositeCommitted(op, "ring");
+    for (const op of layerPending) if (isFill(op)) compositeLive(op, "ring");
+    for (const op of layerOps) compositeCommitted(op, isFill(op) ? "core" : undefined);
+    for (const op of layerPending) compositeLive(op, isFill(op) ? "core" : undefined);
     if (myOwnerId !== null) {
-      for (const op of pendingOps) {
-        if (effectiveLayerId(op, isPublicCanvas) === layerId) compositeLive(op);
-      }
       // A freehand stroke in progress; an unfinished shape on the top layer stays on the overlay canvas
       // (nothing is above it), but on a lower layer it is composited here so higher layers stay above it.
       if (current && current.kind === "draw" && current.layerId === layerId && (!current.shape || !isTopLayerId(layerId))) {
@@ -1694,32 +1711,36 @@ function sampleLayerPixels(layerId) {
   const erases = erasesByOwnerLayer();
   const now = Date.now();
   let masked = null;
-  for (const op of getRenderOrderOps()) {
-    if (op.kind !== "draw" || effectiveLayerId(op, isPublicCanvas) !== layerId) continue;
+  const layerOps = getRenderOrderOps().filter((op) => op.kind === "draw" && effectiveLayerId(op, isPublicCanvas) === layerId);
+  const paintCommitted = (op, part) => {
     const opacity = effectiveOpacity(op, now, isPublicCanvas);
-    if (opacity <= 0) continue;
+    if (opacity <= 0) return;
     if (!opNeedsOwnerMask(op, layerId, erases)) {
       sctx.globalAlpha = opacity;
-      renderPathOnLayer(sctx, "draw", op.color, op.size, op.points, op.shape);
+      renderPathOnLayer(sctx, "draw", op.color, op.size, op.points, op.shape, part);
       sctx.globalAlpha = 1;
-      continue;
+      return;
     }
     const ownerLayer = layers.get(ownerLayerKey(op.ownerId, layerId));
-    if (!ownerLayer) continue;
+    if (!ownerLayer) return;
     if (!masked) masked = document.createElement("canvas");
     masked.width = canvas.width;
     masked.height = canvas.height;
     const m = masked.getContext("2d");
     m.globalAlpha = opacity;
-    renderPathOnLayer(m, "draw", op.color, op.size, op.points, op.shape);
+    renderPathOnLayer(m, "draw", op.color, op.size, op.points, op.shape, part);
     m.globalAlpha = 1;
     m.globalCompositeOperation = "destination-in";
     m.drawImage(ownerLayer.canvas, 0, 0);
     sctx.drawImage(masked, 0, 0);
-  }
-  for (const op of pendingOps) {
-    if (effectiveLayerId(op, isPublicCanvas) === layerId) renderPathOnLayer(sctx, "draw", op.color, op.size, op.points, op.shape);
-  }
+  };
+  const isFill = (op) => op.shape && op.shape.type === "fill";
+  const layerPending = pendingOps.filter((op) => effectiveLayerId(op, isPublicCanvas) === layerId);
+  // Same order as repaintVisibleCanvas: fill expansion rings beneath, then cores/other ops in seq order.
+  for (const op of layerOps) if (isFill(op)) paintCommitted(op, "ring");
+  for (const op of layerPending) if (isFill(op)) renderPathOnLayer(sctx, "draw", op.color, op.size, op.points, op.shape, "ring");
+  for (const op of layerOps) paintCommitted(op, isFill(op) ? "core" : undefined);
+  for (const op of layerPending) renderPathOnLayer(sctx, "draw", op.color, op.size, op.points, op.shape, isFill(op) ? "core" : undefined);
   return sctx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height);
 }
 

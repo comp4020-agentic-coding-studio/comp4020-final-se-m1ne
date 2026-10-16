@@ -61,6 +61,7 @@ function instrument(c: any, el?: HTMLCanvasElement) {
   });
   wrap("rect", () => { tag = "rect"; });
   wrap("ellipse", () => { tag = "ellipse"; });
+  wrap("fillRect", () => log.push({ ctx: name, type: "paint", tag: "fillspan", composite: c.globalCompositeOperation }));
   wrap("lineTo", () => { tag ??= "stroke"; });
   wrap("fill", () => log.push({ ctx: name, type: "paint", tag, composite: c.globalCompositeOperation }));
   wrap("stroke", () => log.push({ ctx: name, type: "paint", tag, composite: c.globalCompositeOperation }));
@@ -319,6 +320,34 @@ describe("pending -> committed transition", () => {
       op({ id: "a", seq: 1, layerId: "lineart", shape: { type: "ellipse", mode: "filled" } }),
       op({ id: "b", seq: 2, layerId: "colour" }),
     ]);
+    log.length = 0;
+    await fullRepaint();
+    expect(blitTags()).toEqual(["rect", "ellipse"]);
+  });
+});
+
+describe("Paint Bucket 1px expansion is drawn beneath, never over, the layer's other content", () => {
+  const fillOp = (over: Record<string, unknown> = {}) =>
+    op({ id: "fill", seq: 2, layerId: "colour", color: "#55b78b", points: [{ x: 0.5, y: 0.5 }], shape: { type: "fill", runs: [500, 600, 50, 501, 600, 50] }, ...over });
+
+  it("the ring is composited first, then the outline op, then the fill core (the outline stays on top of the expansion)", async () => {
+    await boot([op({ id: "outline", seq: 1, layerId: "colour", shape: { type: "rectangle", mode: "outline" } }), fillOp()]);
+    log.length = 0;
+    await fullRepaint();
+    const tags = blitTags();
+    // fill ring, outline rectangle, fill core
+    expect(tags).toEqual(["fillspan", "rect", "fillspan"]);
+  });
+
+  it("a fill on a higher layer still sits above a lower layer's content; the ring does not cross layers", async () => {
+    await boot([op({ id: "low", seq: 1, layerId: "colour", shape: { type: "ellipse", mode: "filled" } }), fillOp({ layerId: "lineart" })]);
+    log.length = 0;
+    await fullRepaint();
+    expect(blitTags()).toEqual(["ellipse", "fillspan", "fillspan"]); // Colour layer first; then Lineart's ring + core
+  });
+
+  it("only fills produce a ring: ordinary ops are composited exactly once", async () => {
+    await boot([op({ id: "a", seq: 1, layerId: "colour" }), op({ id: "b", seq: 2, layerId: "colour", shape: { type: "ellipse", mode: "filled" } })]);
     log.length = 0;
     await fullRepaint();
     expect(blitTags()).toEqual(["rect", "ellipse"]);

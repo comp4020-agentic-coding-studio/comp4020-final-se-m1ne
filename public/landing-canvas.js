@@ -23,7 +23,7 @@
 import { DOCUMENT_WIDTH, DOCUMENT_HEIGHT, documentPointToPixel, brushSizeToDocumentPx } from "./viewport.js";
 import { effectiveOpacity } from "./fade.js";
 import { paintShape } from "./shapes.js";
-import { paintFill } from "./floodfill.js";
+import { paintFill, paintFillRing } from "./floodfill.js";
 
 function toPixels(point) {
   return documentPointToPixel(point, DOCUMENT_WIDTH, DOCUMENT_HEIGHT);
@@ -33,9 +33,11 @@ function toPixels(point) {
 // composite modes, same round caps, same single-point-tap special case --
 // kept in lockstep deliberately, so this preview can never visibly diverge
 // from how the same op renders in the real, interactive editor.
-function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points, shape) {
+function renderPathOnLayer(layerCtx, kind, color, sizeNormalized, points, shape, part) {
   if (shape && shape.type === "fill") {
-    paintFill(layerCtx, color, shape.runs);
+    // core = the spans the flood found; ring = the fixed 1px expansion (see floodfill.js); both = mask coverage
+    if (part !== "core") paintFillRing(layerCtx, color, shape.runs, DOCUMENT_WIDTH, DOCUMENT_HEIGHT);
+    if (part !== "ring") paintFill(layerCtx, color, shape.runs);
     return;
   }
   if (shape && points.length === 2) {
@@ -129,21 +131,25 @@ export function createPublicCanvasRenderer(canvas) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const { canvas: scratchCanvas, ctx: scratchCtx } = ensureScratch();
     const now = Date.now();
-    for (const op of allOps) {
-      if (op.kind !== "draw") continue; // an erase op's effect is already baked into its owner's layer
+    const paintOp = (op, part) => {
       const opacity = effectiveOpacity(op, now, true); // Public only -- this page has no Private Room equivalent
-      if (opacity <= 0) continue;
+      if (opacity <= 0) return;
       const ownerLayer = layers.get(op.ownerId);
-      if (!ownerLayer) continue;
+      if (!ownerLayer) return;
       scratchCtx.clearRect(0, 0, canvas.width, canvas.height);
       scratchCtx.globalAlpha = opacity;
-      renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points, op.shape);
+      renderPathOnLayer(scratchCtx, "draw", op.color, op.size, op.points, op.shape, part);
       scratchCtx.globalAlpha = 1;
       scratchCtx.globalCompositeOperation = "destination-in";
       scratchCtx.drawImage(ownerLayer.canvas, 0, 0);
       scratchCtx.globalCompositeOperation = "source-over";
       ctx.drawImage(scratchCanvas, 0, 0);
-    }
+    };
+    const isFill = (op) => op.shape && op.shape.type === "fill";
+    const drawOps = allOps.filter((op) => op.kind === "draw"); // an erase op's effect is already baked into its owner's layer
+    // A fill's 1px expansion goes beneath everything (so it never overwrites an outline); then cores/other ops in seq order.
+    for (const op of drawOps) if (isFill(op)) paintOp(op, "ring");
+    for (const op of drawOps) paintOp(op, isFill(op) ? "core" : undefined);
   }
 
   function bySeq(a, b) {

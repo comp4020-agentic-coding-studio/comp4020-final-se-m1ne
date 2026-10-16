@@ -89,3 +89,75 @@ export function isValidFillRuns(runs, width, height, maxRuns = MAX_FILL_RUNS) {
   }
   return true;
 }
+
+// --- One-pixel expansion -----------------------------------------------------------------------------------
+// The fill is drawn one canvas pixel wider than the region the flood found, so no thin gap is left against
+// antialiased outlines. The extra pixels (the "ring": the 8-neighbour morphological dilation of the region
+// minus the region itself, clipped to the document) are derived from the stored spans and never stored, so a
+// live fill, a server replay, a refresh and another client all produce exactly the same ring. The ring is
+// painted BENEATH the layer's other content (see repaintVisibleCanvas), so it can only show through where an
+// outline is not fully opaque and never overwrites or thickens an outline.
+export const FILL_EXPANSION_PX = 1; // fixed; deliberately not configurable
+
+function mergeIntervals(list) {
+  const out = [];
+  for (const [a, b] of list) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+// The spans (flat [y, x, length, ...]) of the dilation of `runs` by one pixel in every direction (horizontal,
+// vertical and diagonal), minus `runs` itself, clipped to width x height.
+export function dilateRuns(runs, width, height) {
+  const core = new Map(); // row -> merged, sorted [start, end) intervals of the region
+  for (let i = 0; i < runs.length; i += 3) {
+    const y = runs[i];
+    if (!core.has(y)) core.set(y, []);
+    core.get(y).push([runs[i + 1], runs[i + 1] + runs[i + 2]]);
+  }
+  for (const [y, list] of core) core.set(y, mergeIntervals(list.sort((p, q) => p[0] - q[0])));
+  if (core.size === 0) return [];
+  let minY = Infinity, maxY = -Infinity;
+  for (const y of core.keys()) {
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const out = [];
+  for (let y = Math.max(0, minY - 1); y <= Math.min(height - 1, maxY + 1); y++) {
+    const grown = [];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (const [a, b] of core.get(y + dy) ?? []) grown.push([Math.max(0, a - 1), Math.min(width, b + 1)]);
+    }
+    if (grown.length === 0) continue;
+    const own = core.get(y) ?? [];
+    for (const [a, b] of mergeIntervals(grown.sort((p, q) => p[0] - q[0]))) {
+      let cur = a;
+      for (const [oa, ob] of own) {
+        if (ob <= cur || oa >= b) continue;
+        if (oa > cur) out.push(y, cur, oa - cur);
+        cur = Math.max(cur, ob);
+      }
+      if (cur < b) out.push(y, cur, b - cur);
+    }
+  }
+  return out;
+}
+
+// Derived once per op (keyed by its runs array), never serialised with the op.
+const ringCache = new WeakMap();
+export function fillRingRuns(runs, width, height) {
+  let ring = ringCache.get(runs);
+  if (!ring) {
+    ring = dilateRuns(runs, width, height);
+    ringCache.set(runs, ring);
+  }
+  return ring;
+}
+
+// Paints only the expansion ring, in one solid colour (whole-pixel rects, same as paintFill).
+export function paintFillRing(ctx, color, runs, width, height) {
+  paintFill(ctx, color, fillRingRuns(runs, width, height));
+}
