@@ -20,6 +20,14 @@ Automated checks cover persistent operations, ownership restrictions, determinis
 
 Other qualities require human judgement. I test with separate browser sessions to see whether strokes appear promptly, whether remote cursors are understandable, whether erasing behaves predictably, and whether newcomers can understand the difference between public and private spaces. I also check drawing tools, layer behaviour and interface usability at different browser sizes.
 
+## Access decisions
+
+Shared Canvas allows visitors to view the Public Canvas without an account. Guests can draw after joining, but they can erase, undo and redo only their own contributions. These restrictions are enforced by the server using each guest's identity, rather than trusting the browser to decide ownership.
+
+Private rooms are accessible through their invitation codes. Participants in the same room can view and contribute to its shared artwork, while people outside the room cannot access its drawing operations without the room code. Room isolation and ownership checks are enforced server-side.
+
+These decisions keep joining simple while limiting accidental or deliberate damage to other people's work. The server also records audit events to help inspect access decisions and drawing activity.
+
 ## Current boundaries
 
 Shared Canvas supports pixel drawing and freehand drawing, with tools including pencils, airbrushes, erasers, paint buckets, shape tools, colour selection and zoom. The freehand editor also supports multiple layers with independent visibility and selection. Guest profiles, live cursors, undo/redo and shared rooms support collaboration without permanent accounts.
